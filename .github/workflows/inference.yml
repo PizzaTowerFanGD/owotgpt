@@ -1,0 +1,39 @@
+name: OWoTGPT Runner
+
+on:
+  workflow_dispatch: # Allows manual start from the Actions tab
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install tensorflow-cpu==2.15.0 gpt-2-simple websockets
+
+      - name: Download Model Assets from Release
+        run: |
+          # Downloads the owotgpt.tar file from your latest GitHub Release
+          gh release download --pattern 'owotgpt.tar'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Model
+        run: |
+          # Since the tar contains the 'checkpoint/owotgpt' folders already,
+          # we just extract it here.
+          tar -xvf owotgpt.tar
+
+      - name: Run OWoTGPT Bot
+        run: |
+          # 21000s = 5 hours 50 minutes. 
+          # This allows the bot to run almost the full 6h Action limit.
+          timeout 21000s python bot.py || echo "Finished 6h session"
