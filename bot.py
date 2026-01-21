@@ -13,7 +13,6 @@ TRIGGER = "owotgpt gen"
 BOT_NICK = "OWoTGPT"
 CONTEXT_LENGTH = 15
 
-# Force print to show up immediately in GitHub Actions
 def log(msg):
     print(msg, flush=True)
 
@@ -23,7 +22,7 @@ if not os.path.exists(os.path.join('checkpoint', RUN_NAME)):
     log(f"ERROR: checkpoint/{RUN_NAME} not found.")
     sys.exit(1)
 
-log("Loading GPT-2 model into memory (this takes ~1 minute on CPU)...")
+log("Loading GPT-2 model (CPU mode)...")
 sess = gpt2.start_tf_sess()
 gpt2.load_gpt2(sess, run_name=RUN_NAME)
 log("Model loaded successfully!")
@@ -31,24 +30,42 @@ log("Model loaded successfully!")
 chat_history = []
 
 def format_message(msg_data):
+    """
+    Replicating OWoT chatType logic:
+    - Registered user (no nick change): [*id] realUsername: message
+    - Registered user (nick change): [*id] nickname: message
+    - Unregistered with nick: [*id] nickname: message
+    - Pure anonymous: [id]: message
+    """
     mid = msg_data.get("id", "0")
     nick = msg_data.get("nickname", "")
     real_user = msg_data.get("realUsername", "")
     text = msg_data.get("message", "")
-    mtype = msg_data.get("type", "")
-    if mtype == "user":
-        return f"[*{mid}] {real_user}: {text}"
-    elif mtype in ["user_nick", "anon_nick"]:
-        return f"[*{mid}] {nick}: {text}"
+    is_registered = msg_data.get("registered", False)
+
+    # 1. Registered User Logic
+    if is_registered:
+        # If the user hasn't changed their nickname, nick will be empty or same as realUsername
+        if not nick or nick.lower() == real_user.lower():
+            return f"[*{mid}] {real_user}: {text}"
+        else:
+            return f"[*{mid}] {nick}: {text}"
+    
+    # 2. Unregistered User Logic
     else:
-        return f"[{mid}]: {text}"
+        if nick:
+            # Unregistered but has a nickname set
+            return f"[*{mid}] {nick}: {text}"
+        else:
+            # Pure anonymous
+            return f"[{mid}]: {text}"
 
 async def run_owot_bot():
     global chat_history
     log(f"Connecting to {WORLD_URL}...")
     
     async with websockets.connect(WORLD_URL) as ws:
-        log("Connected! Listening for messages...")
+        log("Connected! Listening...")
         my_id = "0"
         
         while True:
@@ -58,21 +75,25 @@ async def run_owot_bot():
                 
                 if data.get("kind") == "channel":
                     my_id = data.get("id")
-                    log(f"My Client ID: {my_id}")
+                    log(f"Bot Session ID: {my_id}")
 
                 if data.get("kind") == "chat":
+                    # Format message using the new logic
                     formatted = format_message(data)
-                    log(f"Chat: {formatted}") # This will show all chat in logs
+                    log(f"Chat Log: {formatted}")
                     
                     chat_history.append(formatted)
                     if len(chat_history) > CONTEXT_LENGTH:
                         chat_history.pop(0)
 
-                    if TRIGGER in data.get("message", "").lower():
-                        log("Trigger detected! Generating...")
+                    msg_text = data.get("message", "")
+                    if TRIGGER in msg_text.lower():
+                        log("Trigger detected. Generating response...")
                         
+                        # Build prompt
                         prompt = "\n".join(chat_history) + f"\n[*{my_id}] {BOT_NICK}: "
                         
+                        # Generate
                         output = gpt2.generate(
                             sess,
                             run_name=RUN_NAME,
@@ -86,7 +107,7 @@ async def run_owot_bot():
 
                         response = output.strip()
                         if response:
-                            log(f"Generated response: {response}")
+                            log(f"AI Response: {response}")
                             await ws.send(json.dumps({
                                 "kind": "chat",
                                 "nickname": BOT_NICK,
@@ -97,10 +118,10 @@ async def run_owot_bot():
                             chat_history.append(f"[*{my_id}] {BOT_NICK}: {response}")
 
             except websockets.ConnectionClosed:
-                log("Lost connection to server.")
+                log("Server closed connection. Reconnecting...")
                 break
             except Exception as e:
-                log(f"Error: {e}")
+                log(f"Runtime Error: {e}")
 
 if __name__ == "__main__":
     while True:
@@ -109,5 +130,5 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             sys.exit(0)
         except Exception as e:
-            log(f"Restarting due to error: {e}")
+            log(f"Connection lost: {e}. Restarting in 10s...")
             time.sleep(10)
