@@ -4,6 +4,7 @@ import websockets
 import gpt_2_simple as gpt2
 import os
 import sys
+import time
 
 # --- CONFIGURATION ---
 WORLD_URL = "wss://ourworldoftext.com/ws/"
@@ -13,7 +14,6 @@ BOT_NICK = "OWoTGPT"
 CONTEXT_LENGTH = 15
 
 # --- INITIALIZE GPT-2 ---
-# Ensure directory exists before loading
 if not os.path.exists(os.path.join('checkpoint', RUN_NAME)):
     print(f"ERROR: Checkpoint folder 'checkpoint/{RUN_NAME}' not found.")
     sys.exit(1)
@@ -25,10 +25,10 @@ chat_history = []
 
 def format_message(msg_data):
     """
-    Requested Format Logic:
-    - type == 'user': [*id] realUsername: message
-    - type == 'user_nick' or 'anon_nick': [*id] nickname: message
-    - type == 'anon': [id]: message
+    Formatting Logic:
+    1. type == 'user': [*id] realUsername: message
+    2. type == 'user_nick' or 'anon_nick': [*id] nickname: message
+    3. No nickname/anon: [id]: message
     """
     mid = msg_data.get("id", "0")
     nick = msg_data.get("nickname", "")
@@ -41,7 +41,6 @@ def format_message(msg_data):
     elif mtype in ["user_nick", "anon_nick"]:
         return f"[*{mid}] {nick}: {text}"
     else:
-        # For non-nick users
         return f"[{mid}]: {text}"
 
 async def run_owot_bot():
@@ -56,6 +55,7 @@ async def run_owot_bot():
                 raw_data = await ws.recv()
                 data = json.loads(raw_data)
                 
+                # kind: channel tells us our connection ID
                 if data.get("kind") == "channel":
                     my_id = data.get("id")
                     print(f"Bot Session ID: {my_id}")
@@ -69,13 +69,11 @@ async def run_owot_bot():
 
                     msg_text = data.get("message", "").lower()
                     if TRIGGER in msg_text:
-                        # Format prompt: history + our bot's prefix
+                        # Construct prompt ending with our bot line
                         prompt = "\n".join(chat_history)
                         prompt += f"\n[*{my_id}] {BOT_NICK}: "
                         
-                        print(f"Generating for prompt:\n{prompt}")
-                        
-                        # Generate response
+                        print("Generating...")
                         output = gpt2.generate(
                             sess,
                             run_name=RUN_NAME,
@@ -84,7 +82,7 @@ async def run_owot_bot():
                             prefix=prompt,
                             return_as_list=True,
                             include_prefix=False,
-                            truncate='\n' # Stop at first newline
+                            truncate='\n' # Stop generating at newline
                         )[0]
 
                         response = output.strip()
@@ -98,17 +96,15 @@ async def run_owot_bot():
                                 "location": "page",
                                 "color": 0
                             }))
-                            # Feed our own output back into history
                             chat_history.append(f"[*{my_id}] {BOT_NICK}: {response}")
 
             except websockets.ConnectionClosed:
-                print("Connection closed. Reconnecting...")
+                print("Socket closed. Retrying...")
                 break
             except Exception as e:
                 print(f"Error: {e}")
 
 if __name__ == "__main__":
-    # Loop for reconnection
     while True:
         try:
             asyncio.run(run_owot_bot())
