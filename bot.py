@@ -9,12 +9,16 @@ import time
 # --- CONFIGURATION ---
 WORLD_URL = "wss://ourworldoftext.com/ws/"
 RUN_NAME = 'owotgpt'
-TRIGGER_GEN = "owotgpt gen"
-TRIGGER_SON = "my son"
-TRIGGER_CLEAR = "owotgpt clear"
-BOT_NICK = "OWoTGPT"
+BOT_NICK_DEFAULT = "OWoTGPT"
 ADMIN_USER = "gimmickCellar"
-CONTEXT_LENGTH = 15
+CONTEXT_LIMIT = 15
+
+# Triggers
+T_GEN = "owotgpt gen"
+T_SON = "my son"
+T_CLEAR = "owotgpt clear"
+T_IMITATE = "owotgpt imitate"
+T_HELP = "owotgpt help"
 
 def log(msg):
     print(msg, flush=True)
@@ -30,9 +34,19 @@ sess = gpt2.start_tf_sess()
 gpt2.load_gpt2(sess, run_name=RUN_NAME)
 log("Model loaded successfully!")
 
-chat_history = []
+# Separate contexts for Global and Page
+histories = {
+    "page": [],
+    "global": []
+}
 
 def format_message(msg_data):
+    """
+    Formatting Logic:
+    - Registered user: [*id] realUsername: message
+    - Registered with nick change: [*id] nickname: message
+    - Anonymous: [id]: message
+    """
     mid = msg_data.get("id", "0")
     nick = msg_data.get("nickname", "")
     real_user = msg_data.get("realUsername", "")
@@ -40,23 +54,18 @@ def format_message(msg_data):
     is_registered = msg_data.get("registered", False)
 
     if is_registered:
-        # If the user hasn't changed their nickname, nick will be empty or same as realUsername
-        if not nick or nick.lower() == real_user.lower():
-            return f"[*{mid}] {real_user}: {text}"
-        else:
-            return f"[*{mid}] {nick}: {text}"
+        # Use realUsername if no nickname set, otherwise use nickname
+        display_name = nick if nick and nick.lower() != real_user.lower() else real_user
+        return f"[*{mid}] {display_name}: {text}"
     else:
-        if nick:
-            return f"[*{mid}] {nick}: {text}"
-        else:
-            return f"[{mid}]: {text}"
+        return f"[*{mid}] {nick}: {text}" if nick else f"[{mid}]: {text}"
 
 async def run_owot_bot():
-    global chat_history
+    global histories
     log(f"Connecting to {WORLD_URL}...")
     
     async with websockets.connect(WORLD_URL) as ws:
-        log("Connected! Listening for page-only messages...")
+        log("Connected! Listening for messages...")
         my_id = "0"
         
         while True:
@@ -69,44 +78,56 @@ async def run_owot_bot():
                     log(f"Bot Session ID: {my_id}")
 
                 if data.get("kind") == "chat":
-                    # --- FILTER: Only get Main Page chat (non-global) ---
-                    if data.get("location") != "page":
-                        continue
-
+                    loc = data.get("location", "page") # "page" or "global"
                     msg_text = data.get("message", "")
+                    msg_text_l = msg_text.lower()
                     real_user = data.get("realUsername", "")
                     
-                    # 1. Handle "owotgpt clear" (Admin only)
-                    if msg_text.lower() == TRIGGER_CLEAR and real_user == ADMIN_USER:
-                        chat_history = []
-                        log(f"Context cleared by {ADMIN_USER}")
+                    # 1. Command: Help
+                    if msg_text_l == T_HELP:
+                        help_msg = "Commands: owotgpt gen, owotgpt imitate [text], owotgpt help. Admin: my son, owotgpt clear."
+                        await ws.send(json.dumps({"kind": "chat", "nickname": BOT_NICK_DEFAULT, "message": help_msg, "location": loc, "color": 0}))
                         continue
 
-                    # Process and store the message in history
+                    # 2. Command: Clear (Admin only)
+                    if msg_text_l == T_CLEAR and real_user == ADMIN_USER:
+                        histories[loc] = []
+                        log(f"Context for {loc} cleared by {ADMIN_USER}")
+                        await ws.send(json.dumps({"kind": "chat", "nickname": BOT_NICK_DEFAULT, "message": f"Context for {loc} cleared.", "location": loc, "color": 0}))
+                        continue
+
+                    # Add incoming message to history
                     formatted = format_message(data)
-                    log(f"Chat Log: {formatted}")
-                    chat_history.append(formatted)
-                    if len(chat_history) > CONTEXT_LENGTH:
-                        chat_history.pop(0)
+                    log(f"[{loc}] {formatted}")
+                    histories[loc].append(formatted)
+                    if len(histories[loc]) > CONTEXT_LIMIT:
+                        histories[loc].pop(0)
 
                     # --- TRIGGER LOGIC ---
+                    target_prefix = BOT_NICK_DEFAULT
                     should_gen = False
+
+                    # A. Imitate Trigger (Checks prefix)
+                    if msg_text_l.startswith(T_IMITATE):
+                        imitate_name = msg_text[len(T_IMITATE):].strip()
+                        if imitate_name:
+                            target_prefix = imitate_name
+                            should_gen = True
                     
-                    # A. Standard trigger
-                    if TRIGGER_GEN in msg_text.lower():
+                    # B. Standard Gen Trigger
+                    elif T_GEN in msg_text_l:
                         should_gen = True
                     
-                    # B. "my son" trigger (Admin only)
-                    if TRIGGER_SON in msg_text.lower() and real_user == ADMIN_USER:
+                    # C. "My Son" Trigger (Admin only)
+                    elif T_SON in msg_text_l and real_user == ADMIN_USER:
                         should_gen = True
 
                     if should_gen:
-                        log("Trigger detected. Generating response...")
+                        log(f"Generating for {loc} as '{target_prefix}'...")
                         
-                        # Build prompt
-                        prompt = "\n".join(chat_history) + f"\n[*{my_id}] {BOT_NICK}: "
+                        # Build prompt: Context + "[*ID] [TargetPrefix]: "
+                        prompt = "\n".join(histories[loc]) + f"\n[*{my_id}] {target_prefix}: "
                         
-                        # Generate
                         output = gpt2.generate(
                             sess,
                             run_name=RUN_NAME,
@@ -120,19 +141,19 @@ async def run_owot_bot():
 
                         response = output.strip()
                         if response:
-                            log(f"AI Response: {response}")
+                            log(f"AI Output: {response}")
                             await ws.send(json.dumps({
                                 "kind": "chat",
-                                "nickname": BOT_NICK,
+                                "nickname": target_prefix,
                                 "message": response,
-                                "location": "page",
+                                "location": loc,
                                 "color": 0
                             }))
-                            # Add our own line to the history
-                            chat_history.append(f"[*{my_id}] {BOT_NICK}: {response}")
+                            # Add AI's output to the correct history context
+                            histories[loc].append(f"[*{my_id}] {target_prefix}: {response}")
 
             except websockets.ConnectionClosed:
-                log("Server closed connection. Reconnecting...")
+                log("Connection closed. Retrying...")
                 break
             except Exception as e:
                 log(f"Runtime Error: {e}")
