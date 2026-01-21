@@ -9,8 +9,11 @@ import time
 # --- CONFIGURATION ---
 WORLD_URL = "wss://ourworldoftext.com/ws/"
 RUN_NAME = 'owotgpt'
-TRIGGER = "owotgpt gen"
+TRIGGER_GEN = "owotgpt gen"
+TRIGGER_SON = "my son"
+TRIGGER_CLEAR = "owotgpt clear"
 BOT_NICK = "OWoTGPT"
+ADMIN_USER = "gimmickCellar"
 CONTEXT_LENGTH = 15
 
 def log(msg):
@@ -30,34 +33,22 @@ log("Model loaded successfully!")
 chat_history = []
 
 def format_message(msg_data):
-    """
-    Replicating OWoT chatType logic:
-    - Registered user (no nick change): [*id] realUsername: message
-    - Registered user (nick change): [*id] nickname: message
-    - Unregistered with nick: [*id] nickname: message
-    - Pure anonymous: [id]: message
-    """
     mid = msg_data.get("id", "0")
     nick = msg_data.get("nickname", "")
     real_user = msg_data.get("realUsername", "")
     text = msg_data.get("message", "")
     is_registered = msg_data.get("registered", False)
 
-    # 1. Registered User Logic
     if is_registered:
         # If the user hasn't changed their nickname, nick will be empty or same as realUsername
         if not nick or nick.lower() == real_user.lower():
             return f"[*{mid}] {real_user}: {text}"
         else:
             return f"[*{mid}] {nick}: {text}"
-    
-    # 2. Unregistered User Logic
     else:
         if nick:
-            # Unregistered but has a nickname set
             return f"[*{mid}] {nick}: {text}"
         else:
-            # Pure anonymous
             return f"[{mid}]: {text}"
 
 async def run_owot_bot():
@@ -65,7 +56,7 @@ async def run_owot_bot():
     log(f"Connecting to {WORLD_URL}...")
     
     async with websockets.connect(WORLD_URL) as ws:
-        log("Connected! Listening...")
+        log("Connected! Listening for page-only messages...")
         my_id = "0"
         
         while True:
@@ -78,16 +69,38 @@ async def run_owot_bot():
                     log(f"Bot Session ID: {my_id}")
 
                 if data.get("kind") == "chat":
-                    # Format message using the new logic
+                    # --- FILTER: Only get Main Page chat (non-global) ---
+                    if data.get("location") != "page":
+                        continue
+
+                    msg_text = data.get("message", "")
+                    real_user = data.get("realUsername", "")
+                    
+                    # 1. Handle "owotgpt clear" (Admin only)
+                    if msg_text.lower() == TRIGGER_CLEAR and real_user == ADMIN_USER:
+                        chat_history = []
+                        log(f"Context cleared by {ADMIN_USER}")
+                        continue
+
+                    # Process and store the message in history
                     formatted = format_message(data)
                     log(f"Chat Log: {formatted}")
-                    
                     chat_history.append(formatted)
                     if len(chat_history) > CONTEXT_LENGTH:
                         chat_history.pop(0)
 
-                    msg_text = data.get("message", "")
-                    if TRIGGER in msg_text.lower():
+                    # --- TRIGGER LOGIC ---
+                    should_gen = False
+                    
+                    # A. Standard trigger
+                    if TRIGGER_GEN in msg_text.lower():
+                        should_gen = True
+                    
+                    # B. "my son" trigger (Admin only)
+                    if TRIGGER_SON in msg_text.lower() and real_user == ADMIN_USER:
+                        should_gen = True
+
+                    if should_gen:
                         log("Trigger detected. Generating response...")
                         
                         # Build prompt
@@ -115,6 +128,7 @@ async def run_owot_bot():
                                 "location": "page",
                                 "color": 0
                             }))
+                            # Add our own line to the history
                             chat_history.append(f"[*{my_id}] {BOT_NICK}: {response}")
 
             except websockets.ConnectionClosed:
@@ -130,5 +144,5 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             sys.exit(0)
         except Exception as e:
-            log(f"Connection lost: {e}. Restarting in 10s...")
+            log(f"Restarting in 10s... Error: {e}")
             time.sleep(10)
