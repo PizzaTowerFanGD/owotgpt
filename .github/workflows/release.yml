@@ -1,0 +1,38 @@
+name: upload-zip-to-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: "url to the zip file"
+        required: true
+      release_name:
+        description: "github release name"
+        required: true
+      tag_name:
+        description: "git tag for the release"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: download zip
+        run: |
+          curl -L "${{ inputs.zip_url }}" -o archive.zip
+
+      - name: extract zip
+        run: |
+          unzip archive.zip -d extracted
+
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ inputs.release_name }}
+          tag_name: ${{ inputs.tag_name }}
+          files: extracted/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
