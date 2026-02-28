@@ -2,6 +2,7 @@ import asyncio
 import json
 import websockets
 import gpt_2_simple as gpt2
+import tensorflow as tf # Required to fix the Graph error
 import os
 import sys
 import time
@@ -10,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # --- CONFIGURATION ---
 WORLD_URL = "wss://ourworldoftext.com/ws/"
-NETWORK_URL = "wss://ourworldoftext.com/...network/ws/" # Custom network WS
+NETWORK_URL = "wss://ourworldoftext.com/...network/ws/"
 RUN_NAME = 'owotgpt'
 BOT_NICK_DEFAULT = "OWoTGPT"
 ADMIN_USER = "gimmickCellar"
@@ -54,7 +55,9 @@ if not os.path.exists(os.path.join('checkpoint', RUN_NAME)):
     sys.exit(1)
 
 log("Loading GPT-2 model...")
+# Fix: Keep reference to the session and the computation graph
 sess = gpt2.start_tf_sess()
+graph = tf.compat.v1.get_default_graph() 
 gpt2.load_gpt2(sess, run_name=RUN_NAME)
 log("Model loaded successfully!")
 
@@ -63,7 +66,7 @@ executor = ThreadPoolExecutor(max_workers=1)
 histories = {
     "page": [],
     "global": [],
-    "network": [] # Buffer for the custom network
+    "network": []
 }
 
 def format_message(msg_data):
@@ -78,11 +81,14 @@ def format_message(msg_data):
     else:
         return f"[*{mid}] {nick}: {text}" if nick else f"[{mid}]: {text}"
 
+# Generation wrapper with Graph safety
 def do_generate(prompt_str, temp):
-    return gpt2.generate(
-        sess, run_name=RUN_NAME, length=100, temperature=temp,
-        prefix=prompt_str, return_as_list=True, include_prefix=False, truncate='\n'
-    )[0]
+    with graph.as_default():
+        with sess.as_default():
+            return gpt2.generate(
+                sess, run_name=RUN_NAME, length=100, temperature=temp,
+                prefix=prompt_str, return_as_list=True, include_prefix=False, truncate='\n'
+            )[0]
 
 async def handle_websocket(url, is_network=False):
     global histories, current_temperature
@@ -90,7 +96,6 @@ async def handle_websocket(url, is_network=False):
     
     async with websockets.connect(url) as ws:
         my_id = "0"
-        # Shared chat protocol: get history on join
         if is_network:
             await ws.send(json.dumps({"kind": "chathistory"}))
         
@@ -104,11 +109,16 @@ async def handle_websocket(url, is_network=False):
                     log(f"Connected to {url} - ID: {my_id}")
 
                 if data.get("kind") == "chat":
+                    # Self-trigger prevention
                     sender_id = data.get("id")
                     if str(sender_id) == str(my_id):
                         continue
+                    
+                    # IGNORE GLOBAL CHAT ON NETWORK SOCKET
+                    # (Prevent bot from seeing the same global message twice)
+                    if is_network and data.get("location") == "global":
+                        continue
 
-                    # Determine history category
                     if is_network:
                         loc = "network"
                     else:
@@ -118,7 +128,7 @@ async def handle_websocket(url, is_network=False):
                     msg_text_l = msg_text.lower()
                     real_user = data.get("realUsername", "")
 
-                    # 1. Commands
+                    # Commands
                     if msg_text_l == T_HELP:
                         help_msg = ("Commands: owotgpt gen, owotgpt imitate [nick], owotgpt info, owotgpt help.\n"
                                    "Flags: --temp [0.1-1.5], --start [text], --imitate [nick].")
@@ -139,7 +149,7 @@ async def handle_websocket(url, is_network=False):
                         continue
 
                     if msg_text_l == T_INFO:
-                        info_msg = (f"🤖 OWoTGPT Info\nTemp: {current_temperature} | Context: {len(histories[loc])}/{CONTEXT_LIMIT}\nNetwork support: Active")
+                        info_msg = (f"🤖 Info for [{loc}]\nTemp: {current_temperature} | Context: {len(histories[loc])}/{CONTEXT_LIMIT}")
                         await ws.send(json.dumps({"kind": "chat", "nickname": BOT_NICK_DEFAULT, "message": info_msg, "location": loc, "color": 0}))
                         continue
 
@@ -148,7 +158,7 @@ async def handle_websocket(url, is_network=False):
                     histories[loc].append(formatted)
                     if len(histories[loc]) > CONTEXT_LIMIT: histories[loc].pop(0)
 
-                    # 2. Generation Logic
+                    # Generation Logic
                     cleaned_msg, flags = parse_flags(msg_text)
                     cleaned_msg_l = cleaned_msg.lower()
                     should_gen = False
@@ -165,7 +175,7 @@ async def handle_websocket(url, is_network=False):
                         should_gen = True
 
                     if should_gen:
-                        log(f"[{loc}] Generating (Temp: {gen_temp}, Nick: {gen_nick})")
+                        log(f"[{loc}] Generating...")
                         prompt = "\n".join(histories[loc]) + f"\n[*{my_id}] {gen_nick}: {gen_start}"
                         
                         loop = asyncio.get_running_loop()
@@ -183,14 +193,14 @@ async def handle_websocket(url, is_network=False):
                             histories[loc].append(f"[*{my_id}] {gen_nick}: {response}")
 
             except websockets.ConnectionClosed:
-                log(f"Connection to {url} lost. Retrying...")
+                log(f"Lost connection to {url}. Reconnecting...")
                 break
             except Exception as e:
-                log(f"Websocket Error ({url}): {e}")
+                log(f"Error on {url}: {e}")
 
 async def main():
     while True:
-        # Run both the standard world and the custom network concurrently
+        # Run both tasks. Gather will restart if one closes.
         await asyncio.gather(
             handle_websocket(WORLD_URL, is_network=False),
             handle_websocket(NETWORK_URL, is_network=True)
