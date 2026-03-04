@@ -187,7 +187,8 @@ class CommandDispatcher:
             lines.extend(admin_commands)
 
         lines.append("\n💡 Use 'help <command>' for detailed usage.")
-        lines.append("🚩 Available flags:")
+        lines.append("📖 Full documentation: https://termbin.com/zsyo")
+        lines.append("\n🚩 Available flags:")
         lines.append("   --temp [0.1-2.0]    Set generation temperature")
         lines.append("   --start [text]      Provide seed text for generation")
         lines.append("   --imitate [nick]    Use custom nickname (gen command)")
