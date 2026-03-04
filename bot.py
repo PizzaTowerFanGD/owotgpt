@@ -17,6 +17,7 @@ RUN_NAME = 'owotgpt'
 BOT_NICK_DEFAULT = "OWoTGPT"
 ADMIN_USER = "gimmickCellar"
 CONTEXT_LIMIT = 15
+MESSAGE_CHAR_LIMIT = 400  # OWOT message character limit
 
 # Global state
 current_temperature = 1.3
@@ -54,7 +55,9 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp, p
 
 
 async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT):
-    """Send a chat response via websocket."""
+    """Send a chat response via websocket, truncating if over character limit."""
+    if len(message) > MESSAGE_CHAR_LIMIT:
+        message = message[:MESSAGE_CHAR_LIMIT - 3] + "..."
     await ws.send(json.dumps({
         "kind": "chat",
         "nickname": nickname,
