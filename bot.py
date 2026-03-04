@@ -8,6 +8,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from commands import CommandDispatcher, CommandContext, create_dispatcher, parse_flags
+from permissions import PermissionManager
 
 # --- CONFIGURATION ---
 WORLD_URL = "wss://ourworldoftext.com/ws/"
@@ -28,11 +29,15 @@ current_temperature = 1.3
 def log(msg):
     print(msg, flush=True)
 
+# Create global permission manager
+permission_manager = PermissionManager()
+permission_manager.ensure_admin(ADMIN_USER)
+
 # Create global command dispatcher
-command_dispatcher = create_dispatcher()
+command_dispatcher = create_dispatcher(permission_manager)
 
 
-def create_command_context(ws, loc, real_user, my_id, histories, current_temp):
+def create_command_context(ws, loc, real_user, my_id, histories, current_temp, perm_manager):
     """Create a CommandContext with current state."""
     return CommandContext(
         websocket=ws,
@@ -43,7 +48,8 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp):
         bot_nick_default=BOT_NICK_DEFAULT,
         histories=histories,
         current_temperature=current_temp,
-        context_limit=CONTEXT_LIMIT
+        context_limit=CONTEXT_LIMIT,
+        permission_manager=perm_manager
     )
 
 
@@ -136,7 +142,7 @@ async def handle_websocket(url, is_network=False):
                     real_user = data.get("realUsername", "")
 
                     # Create command context
-                    ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature)
+                    ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, permission_manager)
 
                     # Try to dispatch command
                     response_msg = command_dispatcher.dispatch(msg_text, ctx)

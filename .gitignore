@@ -27,3 +27,6 @@ Thumbs.db
 checkpoint/
 models/
 *.ckpt
+
+# User data
+user_permissions.json

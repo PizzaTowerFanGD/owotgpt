@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Any
 from difflib import get_close_matches
+from permissions import PermissionManager, UserTier
 
 
 @dataclass
@@ -23,6 +24,7 @@ class CommandContext:
     histories: Dict[str, List[str]]
     current_temperature: float
     context_limit: int
+    permission_manager: PermissionManager
 
 
 @dataclass
@@ -31,7 +33,7 @@ class Command:
     name: str
     handler: Callable
     aliases: List[str] = field(default_factory=list)
-    is_admin: bool = False
+    required_tier: UserTier = UserTier.USER
     help_text: str = ""
     usage: str = ""
     description: str = ""
@@ -66,9 +68,10 @@ class Command:
 class CommandDispatcher:
     """Routes commands to their handlers with validation and error handling."""
 
-    def __init__(self):
+    def __init__(self, permission_manager: PermissionManager):
         self.commands: Dict[str, Command] = {}
         self.alias_map: Dict[str, str] = {}
+        self.permission_manager = permission_manager
 
     def register(self, command: Command) -> None:
         """Register a command and its aliases."""
@@ -106,9 +109,13 @@ class CommandDispatcher:
 
         command, args = result
 
-        # Check permissions
-        if command.is_admin and ctx.real_user != ctx.admin_user:
-            return "⛔ This command is restricted to admin only."
+        # Check if user is banned
+        if self.permission_manager.is_banned(ctx.real_user):
+            return "🚫 You are banned from using this bot."
+
+        # Check permissions based on tier
+        if not self.permission_manager.can_use_command(ctx.real_user, command.required_tier):
+            return f"⛔ This command requires {command.required_tier.value} tier or higher."
 
         try:
             return command.handler(ctx, args)
@@ -126,8 +133,8 @@ class CommandDispatcher:
 
             if cmd:
                 # Check permission for this command
-                if cmd.is_admin and ctx.real_user != ctx.admin_user:
-                    return f"⛔ Command '{command_name}' is admin-only."
+                if not self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier):
+                    return f"⛔ Command '{command_name}' requires {cmd.required_tier.value} tier or higher."
 
                 lines = [f"📖 Help: {cmd.name}"]
                 if cmd.description:
@@ -136,6 +143,8 @@ class CommandDispatcher:
                     lines.append(f"Usage: {cmd.usage}")
                 if cmd.aliases:
                     lines.append(f"Aliases: {', '.join(cmd.aliases)}")
+                if cmd.required_tier != UserTier.USER:
+                    lines.append(f"Required tier: {cmd.required_tier.value}")
                 if cmd.help_text:
                     lines.append(f"\n{cmd.help_text}")
                 return "\n".join(lines)
@@ -151,22 +160,29 @@ class CommandDispatcher:
         # General help - filter by permissions
         lines = ["📚 Available Commands:"]
         user_commands = []
+        mod_commands = []
         admin_commands = []
 
         for cmd in self.commands.values():
-            is_visible = not cmd.is_admin or ctx.real_user == ctx.admin_user
-            if is_visible:
+            can_use = self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier)
+            if can_use:
                 entry = f"  • {cmd.name}" + (f" ({', '.join(cmd.aliases)})" if cmd.aliases else "")
                 if cmd.description:
                     entry += f" - {cmd.description}"
-                if cmd.is_admin:
+                if cmd.required_tier == UserTier.ADMIN:
                     admin_commands.append(entry)
+                elif cmd.required_tier == UserTier.MODERATOR:
+                    mod_commands.append(entry)
                 else:
                     user_commands.append(entry)
 
         lines.extend(user_commands)
 
-        if admin_commands and ctx.real_user == ctx.admin_user:
+        if mod_commands and (self.permission_manager.is_moderator(ctx.real_user)):
+            lines.append("\n🔹 Moderator Commands:")
+            lines.extend(mod_commands)
+
+        if admin_commands and self.permission_manager.is_admin(ctx.real_user):
             lines.append("\n🔒 Admin Commands:")
             lines.extend(admin_commands)
 
@@ -291,15 +307,83 @@ def handle_imitate(ctx: CommandContext, args: str) -> str:
     return f"GEN_TRIGGER:{gen_temp}|{gen_nick}|{gen_start}"
 
 
-def create_dispatcher() -> CommandDispatcher:
+def handle_tier(ctx: CommandContext, args: str) -> str:
+    """Handle tier command - check or set user tiers (admin only)."""
+    if not args:
+        user_tier = ctx.permission_manager.get_tier(ctx.real_user)
+        return f"👤 Your tier: {user_tier.value}"
+
+    parts = args.split(maxsplit=1)
+    if len(parts) == 1:
+        username = parts[0]
+        tier = ctx.permission_manager.get_tier(username)
+        return f"👤 {username}'s tier: {tier.value}"
+
+    username, tier_name = parts
+    tier_name = tier_name.lower()
+
+    # Validate tier name
+    valid_tiers = [t.value for t in UserTier]
+    if tier_name not in valid_tiers:
+        return f"❌ Invalid tier. Valid tiers: {', '.join(valid_tiers)}"
+
+    try:
+        new_tier = UserTier(tier_name)
+        ctx.permission_manager.set_tier(username, new_tier)
+        return f"✅ Set {username}'s tier to {new_tier.value}"
+    except ValueError:
+        return f"❌ Invalid tier: {tier_name}"
+
+
+def handle_untier(ctx: CommandContext, args: str) -> str:
+    """Handle untier command - remove custom tier from user (admin only)."""
+    if not args:
+        return "❌ Usage: untier <username>"
+
+    username = args.strip()
+    if ctx.permission_manager.remove_user(username):
+        return f"✅ Removed custom tier from {username} (reverted to user)"
+    else:
+        return f"❓ {username} doesn't have a custom tier"
+
+
+def handle_listtiers(ctx: CommandContext, args: str) -> str:
+    """Handle listtiers command - list all users with custom tiers (admin only)."""
+    users = ctx.permission_manager.get_all_users()
+    if not users:
+        return "📋 No users with custom tiers"
+
+    lines = ["📋 Users with custom tiers:"]
+    for username, tier in sorted(users.items()):
+        lines.append(f"  • {username}: {tier}")
+    return "\n".join(lines)
+
+
+def handle_checktier(ctx: CommandContext, args: str) -> str:
+    """Handle checktier command - check your current tier."""
+    user_tier = ctx.permission_manager.get_tier(ctx.real_user)
+    lines = [f"👤 Your tier: {user_tier.value}"]
+
+    if user_tier == UserTier.BANNED:
+        lines.append("🚫 You are banned from using this bot")
+    elif user_tier == UserTier.ADMIN:
+        lines.append("🔒 You have admin privileges")
+    elif user_tier == UserTier.MODERATOR:
+        lines.append("🔹 You have moderator privileges")
+
+    return "\n".join(lines)
+
+
+def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatcher:
     """Create and configure the command dispatcher with all commands."""
-    dispatcher = CommandDispatcher()
+    dispatcher = CommandDispatcher(permission_manager)
 
     # Help command
     dispatcher.register(Command(
         name="owotgpt help",
         handler=handle_help,
         aliases=["help", "owotgpt h", "h"],
+        required_tier=UserTier.USER,
         description="Show available commands or detailed help for a specific command",
         usage="help [command]",
         help_text="Without arguments, shows all available commands. With a command name, shows detailed usage."
@@ -310,26 +394,38 @@ def create_dispatcher() -> CommandDispatcher:
         name="owotgpt info",
         handler=handle_info,
         aliases=["info", "owotgpt i", "i"],
+        required_tier=UserTier.USER,
         description="Show bot status and configuration",
         usage="info"
     ))
 
-    # Clear command (admin)
+    # Checktier command
+    dispatcher.register(Command(
+        name="owotgpt checktier",
+        handler=handle_checktier,
+        aliases=["checktier", "owotgpt tier", "tier"],
+        required_tier=UserTier.USER,
+        description="Check your current permission tier",
+        usage="checktier",
+        help_text="Shows your current tier and what privileges you have."
+    ))
+
+    # Clear command (moderator)
     dispatcher.register(Command(
         name="owotgpt clear",
         handler=handle_clear,
         aliases=["clear", "owotgpt clearhistory", "clearhistory"],
-        is_admin=True,
+        required_tier=UserTier.MODERATOR,
         description="Clear message history for current location",
         usage="clear"
     ))
 
-    # Temp command (admin)
+    # Temp command (moderator)
     dispatcher.register(Command(
         name="owotgpt temp",
         handler=handle_temp,
         aliases=["temp", "owotgpt temperature", "temperature"],
-        is_admin=True,
+        required_tier=UserTier.MODERATOR,
         description="Set global temperature for text generation",
         usage="temp <value>",
         help_text="Temperature controls randomness. Lower values (0.1-0.5) produce more focused text, higher values (1.0-2.0) produce more creative text."
@@ -340,6 +436,7 @@ def create_dispatcher() -> CommandDispatcher:
         name="owotgpt gen",
         handler=handle_gen,
         aliases=["gen", "owotgpt generate", "generate", "owotgpt g", "g"],
+        required_tier=UserTier.USER,
         description="Generate text using GPT-2",
         usage="gen [--temp <value>] [--start <text>] [--imitate <nick>]",
         help_text="Generates text based on conversation context. Use --temp to override temperature, --start to provide seed text, --imitate to use a custom nickname."
@@ -350,20 +447,54 @@ def create_dispatcher() -> CommandDispatcher:
         name="owotgpt imitate",
         handler=handle_imitate,
         aliases=["imitate", "owotgpt im", "im"],
+        required_tier=UserTier.USER,
         description="Generate text with a custom nickname",
         usage="imitate <nickname> [--temp <value>] [--start <text>]",
         help_text="Similar to gen, but uses a custom nickname for the response. You can also use --imitate flag with gen command."
     ))
 
-    # Legacy "my son" trigger (admin)
+    # Tier command (admin)
+    dispatcher.register(Command(
+        name="owotgpt tier",
+        handler=handle_tier,
+        aliases=["settier", "owotgpt settier", "set tier"],
+        required_tier=UserTier.ADMIN,
+        description="Set or check user tiers",
+        usage="tier [username] [admin|moderator|user|banned]",
+        help_text="Without arguments: shows your tier. With username: shows that user's tier. With username and tier: sets the user's tier. Changes are saved permanently."
+    ))
+
+    # Untier command (admin)
+    dispatcher.register(Command(
+        name="owotgpt untier",
+        handler=handle_untier,
+        aliases=["untier", "owotgpt removetier", "removetier"],
+        required_tier=UserTier.ADMIN,
+        description="Remove custom tier from a user",
+        usage="untier <username>",
+        help_text="Removes a user's custom tier, reverting them to 'user' tier."
+    ))
+
+    # Listtiers command (admin)
+    dispatcher.register(Command(
+        name="owotgpt listtiers",
+        handler=handle_listtiers,
+        aliases=["listtiers", "owotgpt listusers", "listusers"],
+        required_tier=UserTier.ADMIN,
+        description="List all users with custom tiers",
+        usage="listtiers",
+        help_text="Shows all users who have been assigned non-default tiers."
+    ))
+
+    # Legacy "my son" trigger (moderator)
     dispatcher.register(Command(
         name="my son",
         handler=handle_gen,
         aliases=[],
-        is_admin=True,
-        description="Legacy trigger for text generation (admin only)",
+        required_tier=UserTier.MODERATOR,
+        description="Legacy trigger for text generation (moderator only)",
         usage="my son [--temp <value>] [--start <text>]",
-        help_text="Admin-only legacy command. Functions like 'gen' but only admins can use it."
+        help_text="Moderator-only legacy command. Functions like 'gen' but only moderators+ can use it."
     ))
 
     return dispatcher
