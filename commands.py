@@ -237,7 +237,7 @@ def parse_flags(text: str) -> tuple[str, dict]:
 def handle_help(ctx: CommandContext, args: str) -> str:
     """Handle help command - shows general or specific command help."""
     # Create dispatcher to access get_help
-    dispatcher = create_dispatcher()
+    dispatcher = create_dispatcher(ctx.permission_manager)
     return dispatcher.get_help(ctx, args.strip())
 
 
