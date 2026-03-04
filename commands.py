@@ -211,32 +211,45 @@ def parse_flags(text: str, valid_flags: list = None) -> tuple[str, dict]:
     """
     Parse command flags from text.
     Returns (cleaned_text, flags_dict).
-    
+
     Args:
         text: Input text to parse
         valid_flags: List of valid flag names to extract. If None, extracts all --flags.
     """
     flags = {}
     cleaned_text = text
-    
+
     # Find all --flag value patterns
-    pattern = r'--(\w+)\s+((?:(?!--).)+)' if valid_flags is None else rf'--({"|".join(valid_flags)})\s+((?:(?!--).)+)'
+    # Pattern captures: flag name in group 1, value in group 2 (everything until next -- or end)
+    if valid_flags is None:
+        pattern = r'--(\w+)\s+((?:(?!--).)+)'
+    else:
+        pattern = rf'--({"|".join(re.escape(f) for f in valid_flags)})\s+((?:(?!--).)+)'
+
     matches = re.findall(pattern, text, re.IGNORECASE)
-    
+
     for match in matches:
         if isinstance(match, tuple):
             flag_name, flag_value = match
         else:
-            # When valid_flags is None, pattern captures differently
+            # Single group match - shouldn't happen with this pattern
             continue
+
         flag_name = flag_name.lower()
         val = flag_value.strip()
+
+        # When valid_flags is None, we need to validate the flag name ourselves
+        if valid_flags is not None:
+            valid_names = [f.lower() for f in valid_flags]
+            if flag_name not in valid_names:
+                continue
+
         flags[flag_name] = val
-        
+
         # Remove the flag from cleaned text
-        cleaned_text = re.sub(rf'--{flag_name}\s+{re.escape(flag_value)}',
+        cleaned_text = re.sub(rf'--{re.escape(match[0])}\s+{re.escape(flag_value)}',
                               '', cleaned_text, flags=re.IGNORECASE).strip()
-    
+
     return cleaned_text, flags
 
 
