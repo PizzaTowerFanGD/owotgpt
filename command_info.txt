@@ -1,0 +1,110 @@
+═══════════════════════════════════════════════════════════════════
+                      OWoTGPT Bot - Command Reference
+═══════════════════════════════════════════════════════════════════
+
+OVERVIEW
+────────
+OWoTGPT is a GPT-2 powered chatbot for Our World of Text (OWoT).
+It generates contextual responses based on conversation history.
+
+BASIC USAGE
+───────────
+All commands start with "owotgpt" or can use shorter aliases.
+Flags use --key value syntax.
+
+COMMANDS
+────────
+
+📚 owotgpt help [command]
+   Aliases: help, owotgpt h, h
+   Shows available commands or detailed help for a specific command.
+
+📊 owotgpt info
+   Aliases: info, owotgpt i, i
+   Shows bot status including current temperature and context size.
+
+🔍 owotgpt checktier
+   Aliases: checktier, owotgpt tier, tier
+   Shows your current permission tier.
+
+✨ owotgpt gen [--temp <value>] [--start <text>] [--imitate <nick>]
+   Aliases: gen, owotgpt generate, generate, owotgpt g, g
+   Generates text using GPT-2 based on conversation context.
+
+   Flags:
+   --temp <0.1-2.0>    Override temperature for this generation
+   --start <text>      Provide seed text to start generation
+   --imitate <nick>    Use a custom nickname for the response
+
+🎭 owotgpt imitate [--nick <nickname>] [--temp <value>] [--start <text>]
+   Aliases: imitate, owotgpt im, im
+   Generate text with a custom nickname.
+
+   Flags:
+   --nick <nickname>   Required. Nickname to imitate
+   --temp <0.1-2.0>    Override temperature
+   --start <text>      Seed text for generation
+
+🔹 MODERATOR COMMANDS
+────────────────────
+
+🧹 owotgpt clear
+   Aliases: clear, owotgpt clearhistory, clearhistory
+   Clears message history for the current location.
+
+🌡️  owotgpt temp <value> or temp --value <value>
+   Aliases: temp, owotgpt temperature, temperature
+   Sets global temperature for text generation.
+   Range: 0.1 (focused) to 2.0 (creative)
+
+👑 ADMIN COMMANDS
+─────────────────
+
+⚙️  owotgpt tier [--user <username>] [--tier <tier>]
+   Aliases: settier, owotgpt settier, set tier
+   Check or set user permission tiers.
+   Tiers: admin, moderator, user, banned
+
+🗑️  owotgpt untier --user <username>
+   Aliases: untier, owotgpt removetier, removetier
+   Removes custom tier from a user.
+
+📋 owotgpt listtiers
+   Aliases: listtiers, owotgpt listusers, listusers
+   Lists all users with custom tiers.
+
+AVAILABLE FLAGS
+───────────────
+--temp <0.1-2.0>      Set generation temperature
+--start <text>        Provide seed text
+--imitate <nick>      Use custom nickname (gen command)
+--nick <nick>         Use custom nickname (imitate command)
+--value <number>      Set numeric value (temp command)
+--user <username>     Specify target user
+--tier <tier>         Set user tier
+
+TEMPERATURE GUIDE
+─────────────────
+• 0.1 - 0.5:  Focused, predictable, repetitive
+• 0.6 - 1.0:  Balanced, coherent, creative
+• 1.1 - 1.5:  Very creative, varied outputs
+• 1.6 - 2.0:  Chaotic, experimental, surprising
+
+EXAMPLES
+────────
+owotgpt gen
+→ Generate text with default settings
+
+owotgpt gen --temp 1.5 --start "Hello there"
+→ Generate starting with "Hello there" at high temperature
+
+owotgpt imitate --nick DrSeuss --temp 1.2
+→ Generate as DrSeuss with elevated creativity
+
+owotgpt temp --value 1.5
+→ Set global temperature to 1.5
+
+owotgpt tier --user SomeUser --tier moderator
+→ Promote SomeUser to moderator
+
+═══════════════════════════════════════════════════════════════════
