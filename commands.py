@@ -187,7 +187,14 @@ class CommandDispatcher:
             lines.extend(admin_commands)
 
         lines.append("\n💡 Use 'help <command>' for detailed usage.")
-        lines.append("🚩 Flags: --temp [0.1-2.0], --start [text], --imitate [nick]")
+        lines.append("🚩 Available flags:")
+        lines.append("   --temp [0.1-2.0]    Set generation temperature")
+        lines.append("   --start [text]      Provide seed text for generation")
+        lines.append("   --imitate [nick]    Use custom nickname (gen command)")
+        lines.append("   --nick [nick]       Use custom nickname (imitate command)")
+        lines.append("   --value [number]    Set temperature value")
+        lines.append("   --user [username]   Specify target user")
+        lines.append("   --tier [tier]       Set user tier (admin/moderator/user/banned)")
 
         return "\n".join(lines)
 
@@ -199,34 +206,36 @@ class CommandDispatcher:
         return suggestions[0] if suggestions else None
 
 
-def parse_flags(text: str) -> tuple[str, dict]:
+def parse_flags(text: str, valid_flags: list = None) -> tuple[str, dict]:
     """
     Parse command flags from text.
     Returns (cleaned_text, flags_dict).
+    
+    Args:
+        text: Input text to parse
+        valid_flags: List of valid flag names to extract. If None, extracts all --flags.
     """
-    flags = {"temp": None, "start": "", "imitate": None}
-    matches = re.findall(r'--(temp|start|imitate)\s+((?:(?!--).)+)', text, re.IGNORECASE)
+    flags = {}
     cleaned_text = text
-
-    for flag_name, flag_value in matches:
+    
+    # Find all --flag value patterns
+    pattern = r'--(\w+)\s+((?:(?!--).)+)' if valid_flags is None else rf'--({"|".join(valid_flags)})\s+((?:(?!--).)+)'
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    
+    for match in matches:
+        if isinstance(match, tuple):
+            flag_name, flag_value = match
+        else:
+            # When valid_flags is None, pattern captures differently
+            continue
         flag_name = flag_name.lower()
         val = flag_value.strip()
-
-        if flag_name == "temp":
-            try:
-                temp_val = float(val)
-                flags["temp"] = max(0.1, min(2.0, temp_val))
-            except ValueError:
-                pass  # Invalid temp, leave as None
-        elif flag_name == "start":
-            flags["start"] = val
-        elif flag_name == "imitate":
-            flags["imitate"] = val
-
+        flags[flag_name] = val
+        
         # Remove the flag from cleaned text
         cleaned_text = re.sub(rf'--{flag_name}\s+{re.escape(flag_value)}',
                               '', cleaned_text, flags=re.IGNORECASE).strip()
-
+    
     return cleaned_text, flags
 
 
@@ -260,13 +269,17 @@ def handle_clear(ctx: CommandContext, args: str) -> str:
 
 def handle_temp(ctx: CommandContext, args: str) -> Optional[str]:
     """Handle temp command - sets global temperature."""
-    if not args:
-        return f"🌡️ Current temperature: {ctx.current_temperature}\nUsage: temp <value> (0.1-2.0)"
+    cleaned_args, flags = parse_flags(args, valid_flags=["value"])
+    
+    # Use --value flag if provided, otherwise use positional argument
+    temp_val = flags.get("value", cleaned_args.strip() if cleaned_args else None)
+    
+    if not temp_val:
+        return f"🌡️ Current temperature: {ctx.current_temperature}\nUsage: temp <value> (0.1-2.0) or temp --value <value>"
 
     try:
-        new_temp = float(args.split()[0])
+        new_temp = float(temp_val.split()[0] if isinstance(temp_val, str) else temp_val)
         clamped_temp = max(0.1, min(2.0, new_temp))
-        # Note: We return the value; caller must update the global state
         return f"SET_TEMP:{clamped_temp}"
     except ValueError:
         return "❌ Temperature must be a number between 0.1 and 2.0"
@@ -277,10 +290,19 @@ def handle_gen(ctx: CommandContext, args: str) -> str:
     Handle gen command - triggers text generation.
     Returns a special marker that bot.py will intercept to trigger generation.
     """
-    cleaned_args, flags = parse_flags(args)
-    gen_temp = flags["temp"] if flags["temp"] is not None else ctx.current_temperature
-    gen_nick = flags["imitate"] if flags["imitate"] else ctx.bot_nick_default
-    gen_start = flags["start"]
+    cleaned_args, flags = parse_flags(args, valid_flags=["temp", "start", "imitate"])
+    
+    # Parse --temp flag with validation
+    gen_temp = ctx.current_temperature
+    if "temp" in flags:
+        try:
+            temp_val = float(flags["temp"])
+            gen_temp = max(0.1, min(2.0, temp_val))
+        except ValueError:
+            pass
+    
+    gen_nick = flags.get("imitate", ctx.bot_nick_default)
+    gen_start = flags.get("start", "")
 
     # Return marker with generation parameters
     return f"GEN_TRIGGER:{gen_temp}|{gen_nick}|{gen_start}"
@@ -289,40 +311,63 @@ def handle_gen(ctx: CommandContext, args: str) -> str:
 def handle_imitate(ctx: CommandContext, args: str) -> str:
     """
     Handle imitate command - triggers generation with custom nickname.
-    Supports both legacy syntax and --imitate flag.
+    Supports both legacy syntax and --nick flag.
     """
-    cleaned_args, flags = parse_flags(args)
+    cleaned_args, flags = parse_flags(args, valid_flags=["nick", "temp", "start"])
 
-    # Use --imitate flag if provided, otherwise use the first argument
-    gen_nick = flags["imitate"]
+    # Use --nick flag if provided, otherwise use the first positional argument
+    gen_nick = flags.get("nick")
     if not gen_nick and cleaned_args:
         gen_nick = cleaned_args.split()[0]
 
     if not gen_nick:
-        return "❌ Please specify a nickname to imitate.\nUsage: imitate <nickname> [--temp <value>] [--start <text>]"
+        return "❌ Please specify a nickname to imitate.\nUsage: imitate --nick <nickname> [--temp <value>] [--start <text>] or imitate <nickname>"
 
-    gen_temp = flags["temp"] if flags["temp"] is not None else ctx.current_temperature
-    gen_start = flags["start"]
+    # Parse --temp flag with validation
+    gen_temp = ctx.current_temperature
+    if "temp" in flags:
+        try:
+            temp_val = float(flags["temp"])
+            gen_temp = max(0.1, min(2.0, temp_val))
+        except ValueError:
+            pass
+    
+    gen_start = flags.get("start", "")
 
     return f"GEN_TRIGGER:{gen_temp}|{gen_nick}|{gen_start}"
 
 
 def handle_tier(ctx: CommandContext, args: str) -> str:
     """Handle tier command - check or set user tiers (admin only)."""
-    if not args:
+    cleaned_args, flags = parse_flags(args, valid_flags=["user", "tier"])
+    
+    # Use flags if provided
+    username = flags.get("user")
+    tier_name = flags.get("tier")
+    
+    # Fall back to positional args
+    if not username and not tier_name and cleaned_args:
+        parts = cleaned_args.split(maxsplit=1)
+        if len(parts) == 1:
+            username = parts[0]
+        else:
+            username, tier_name = parts[0], parts[1]
+    elif username and not tier_name and cleaned_args:
+        # --user provided, positional arg is tier
+        tier_name = cleaned_args.strip()
+    
+    # Show current user's tier
+    if not username:
         user_tier = ctx.permission_manager.get_tier(ctx.real_user)
         return f"👤 Your tier: {user_tier.value}"
 
-    parts = args.split(maxsplit=1)
-    if len(parts) == 1:
-        username = parts[0]
+    # Show specific user's tier
+    if not tier_name:
         tier = ctx.permission_manager.get_tier(username)
         return f"👤 {username}'s tier: {tier.value}"
 
-    username, tier_name = parts
+    # Set user's tier
     tier_name = tier_name.lower()
-
-    # Validate tier name
     valid_tiers = [t.value for t in UserTier]
     if tier_name not in valid_tiers:
         return f"❌ Invalid tier. Valid tiers: {', '.join(valid_tiers)}"
@@ -337,10 +382,13 @@ def handle_tier(ctx: CommandContext, args: str) -> str:
 
 def handle_untier(ctx: CommandContext, args: str) -> str:
     """Handle untier command - remove custom tier from user (admin only)."""
-    if not args:
-        return "❌ Usage: untier <username>"
+    cleaned_args, flags = parse_flags(args, valid_flags=["user"])
+    
+    username = flags.get("user", cleaned_args.strip() if cleaned_args else None)
+    
+    if not username:
+        return "❌ Usage: untier --user <username> or untier <username>"
 
-    username = args.strip()
     if ctx.permission_manager.remove_user(username):
         return f"✅ Removed custom tier from {username} (reverted to user)"
     else:
@@ -427,7 +475,7 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         aliases=["temp", "owotgpt temperature", "temperature"],
         required_tier=UserTier.MODERATOR,
         description="Set global temperature for text generation",
-        usage="temp <value>",
+        usage="temp <value> or temp --value <value>",
         help_text="Temperature controls randomness. Lower values (0.1-0.5) produce more focused text, higher values (1.0-2.0) produce more creative text."
     ))
 
@@ -449,8 +497,8 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         aliases=["imitate", "owotgpt im", "im"],
         required_tier=UserTier.USER,
         description="Generate text with a custom nickname",
-        usage="imitate <nickname> [--temp <value>] [--start <text>]",
-        help_text="Similar to gen, but uses a custom nickname for the response. You can also use --imitate flag with gen command."
+        usage="imitate --nick <nickname> [--temp <value>] [--start <text>] or imitate <nickname>",
+        help_text="Similar to gen, but uses a custom nickname for the response. Supports --nick, --temp, and --start flags."
     ))
 
     # Tier command (admin)
@@ -460,8 +508,8 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         aliases=["settier", "owotgpt settier", "set tier"],
         required_tier=UserTier.ADMIN,
         description="Set or check user tiers",
-        usage="tier [username] [admin|moderator|user|banned]",
-        help_text="Without arguments: shows your tier. With username: shows that user's tier. With username and tier: sets the user's tier. Changes are saved permanently."
+        usage="tier [--user <username>] [--tier <admin|moderator|user|banned>] or tier [username] [tier]",
+        help_text="Without arguments: shows your tier. With --user: shows that user's tier. With --user and --tier: sets the user's tier. Changes are saved permanently."
     ))
 
     # Untier command (admin)
@@ -471,7 +519,7 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         aliases=["untier", "owotgpt removetier", "removetier"],
         required_tier=UserTier.ADMIN,
         description="Remove custom tier from a user",
-        usage="untier <username>",
+        usage="untier --user <username> or untier <username>",
         help_text="Removes a user's custom tier, reverting them to 'user' tier."
     ))
 
