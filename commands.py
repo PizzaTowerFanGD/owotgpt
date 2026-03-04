@@ -468,7 +468,7 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
     dispatcher.register(Command(
         name="owotgpt checktier",
         handler=handle_checktier,
-        aliases=["checktier", "owotgpt tier", "tier"],
+        aliases=["checktier"],
         required_tier=UserTier.USER,
         description="Check your current permission tier",
         usage="checktier",
