@@ -354,11 +354,11 @@ def handle_imitate(ctx: CommandContext, args: str) -> str:
 def handle_tier(ctx: CommandContext, args: str) -> str:
     """Handle tier command - check or set user tiers (admin only)."""
     cleaned_args, flags = parse_flags(args, valid_flags=["user", "tier"])
-    
+
     # Use flags if provided
     username = flags.get("user")
     tier_name = flags.get("tier")
-    
+
     # Fall back to positional args
     if not username and not tier_name and cleaned_args:
         parts = cleaned_args.split(maxsplit=1)
@@ -369,6 +369,9 @@ def handle_tier(ctx: CommandContext, args: str) -> str:
     elif username and not tier_name and cleaned_args:
         # --user provided, positional arg is tier
         tier_name = cleaned_args.strip()
+    elif tier_name and not username and cleaned_args:
+        # --tier provided, positional arg is user
+        username = cleaned_args.strip()
     
     # Show current user's tier
     if not username:
