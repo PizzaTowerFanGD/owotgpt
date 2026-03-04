@@ -5,9 +5,9 @@ import gpt_2_simple as gpt2
 import tensorflow as tf # Required to fix the Graph error
 import os
 import sys
-import time
-import re
 from concurrent.futures import ThreadPoolExecutor
+
+from commands import CommandDispatcher, CommandContext, create_dispatcher, parse_flags
 
 # --- CONFIGURATION ---
 WORLD_URL = "wss://ourworldoftext.com/ws/"
@@ -20,34 +20,42 @@ CONTEXT_LIMIT = 15
 # Global state
 current_temperature = 1.3
 
-# Triggers
-T_GEN = "owotgpt gen"
-T_SON = "my son"
-T_CLEAR = "owotgpt clear"
-T_IMITATE = "owotgpt imitate"
-T_HELP = "owotgpt help"
-T_TEMP = "owotgpt temp"
-T_INFO = "owotgpt info"
+# Legacy triggers (kept for reference, now handled by command dispatcher)
+# T_GEN = "owotgpt gen", T_SON = "my son", T_CLEAR = "owotgpt clear"
+# T_IMITATE = "owotgpt imitate", T_HELP = "owotgpt help"
+# T_TEMP = "owotgpt temp", T_INFO = "owotgpt info"
 
 def log(msg):
     print(msg, flush=True)
 
-def parse_flags(text):
-    flags = {"temp": None, "start": "", "imitate": None}
-    matches = re.findall(r'--(temp|start|imitate)\s+((?:(?!--).)+)', text, re.IGNORECASE)
-    cleaned_text = text
-    for flag_name, flag_value in matches:
-        flag_name = flag_name.lower()
-        val = flag_value.strip()
-        if flag_name == "temp":
-            try: flags["temp"] = float(val)
-            except: pass
-        elif flag_name == "start":
-            flags["start"] = val
-        elif flag_name == "imitate":
-            flags["imitate"] = val
-        cleaned_text = re.sub(rf'--{flag_name}\s+{re.escape(flag_value)}', '', cleaned_text, flags=re.IGNORECASE).strip()
-    return cleaned_text, flags
+# Create global command dispatcher
+command_dispatcher = create_dispatcher()
+
+
+def create_command_context(ws, loc, real_user, my_id, histories, current_temp):
+    """Create a CommandContext with current state."""
+    return CommandContext(
+        websocket=ws,
+        location=loc,
+        real_user=real_user,
+        my_id=my_id,
+        admin_user=ADMIN_USER,
+        bot_nick_default=BOT_NICK_DEFAULT,
+        histories=histories,
+        current_temperature=current_temp,
+        context_limit=CONTEXT_LIMIT
+    )
+
+
+async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT):
+    """Send a chat response via websocket."""
+    await ws.send(json.dumps({
+        "kind": "chat",
+        "nickname": nickname,
+        "message": message,
+        "location": loc,
+        "color": 0
+    }))
 
 log("--- Starting Bot Initialization ---")
 if not os.path.exists(os.path.join('checkpoint', RUN_NAME)):
@@ -125,72 +133,53 @@ async def handle_websocket(url, is_network=False):
                         loc = data.get("location", "page")
                     
                     msg_text = data.get("message", "")
-                    msg_text_l = msg_text.lower()
                     real_user = data.get("realUsername", "")
 
-                    # Commands
-                    if msg_text_l == T_HELP:
-                        help_msg = ("Commands: owotgpt gen, owotgpt imitate [nick], owotgpt info, owotgpt help.\n"
-                                   "Flags: --temp [0.1-1.5], --start [text], --imitate [nick].")
-                        await ws.send(json.dumps({"kind": "chat", "nickname": BOT_NICK_DEFAULT, "message": help_msg, "location": loc, "color": 0}))
+                    # Create command context
+                    ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature)
+
+                    # Try to dispatch command
+                    response_msg = command_dispatcher.dispatch(msg_text, ctx)
+
+                    if response_msg:
+                        # Handle special command responses
+                        if response_msg.startswith("GEN_TRIGGER:"):
+                            # Parse generation parameters from response marker
+                            _, params = response_msg.split(":", 1)
+                            gen_temp_str, gen_nick, gen_start = params.split("|", 2)
+                            gen_temp = float(gen_temp_str)
+
+                            log(f"[{loc}] Generating...")
+                            prompt = "\n".join(histories[loc]) + f"\n[*{my_id}] {gen_nick}: {gen_start}"
+
+                            loop = asyncio.get_running_loop()
+                            output = await loop.run_in_executor(executor, do_generate, prompt, gen_temp)
+                            gen_response = (gen_start + " " + output.strip()).strip()
+
+                            if gen_response:
+                                await send_response(ws, gen_response, loc, gen_nick)
+                                histories[loc].append(f"[*{my_id}] {gen_nick}: {gen_response}")
+
+                        elif response_msg.startswith("SET_TEMP:"):
+                            # Update global temperature
+                            _, temp_str = response_msg.split(":", 1)
+                            current_temperature = float(temp_str)
+                            await send_response(ws, f"🌡️ Global temperature set to {current_temperature}", loc)
+
+                        else:
+                            # Regular response
+                            await send_response(ws, response_msg, loc)
                         continue
 
-                    if msg_text_l == T_CLEAR and real_user == ADMIN_USER:
-                        histories[loc] = []
-                        await ws.send(json.dumps({"kind": "chat", "nickname": BOT_NICK_DEFAULT, "message": f"Context for {loc} cleared.", "location": loc, "color": 0}))
-                        continue
-
-                    if msg_text_l.startswith(T_TEMP) and real_user == ADMIN_USER:
-                        try:
-                            new_temp_str = msg_text_l.replace(T_TEMP, "").strip()
-                            current_temperature = max(0.1, min(2.0, float(new_temp_str)))
-                            await ws.send(json.dumps({"kind": "chat", "nickname": BOT_NICK_DEFAULT, "message": f"Global temperature set to {current_temperature}", "location": loc, "color": 0}))
-                        except: pass
-                        continue
-
-                    if msg_text_l == T_INFO:
-                        info_msg = (f"🤖 Info for [{loc}]\nTemp: {current_temperature} | Context: {len(histories[loc])}/{CONTEXT_LIMIT}")
-                        await ws.send(json.dumps({"kind": "chat", "nickname": BOT_NICK_DEFAULT, "message": info_msg, "location": loc, "color": 0}))
-                        continue
-
-                    # Add to history
+                    # Add non-command messages to history
                     formatted = format_message(data)
                     histories[loc].append(formatted)
-                    if len(histories[loc]) > CONTEXT_LIMIT: histories[loc].pop(0)
+                    if len(histories[loc]) > CONTEXT_LIMIT:
+                        histories[loc].pop(0)
 
-                    # Generation Logic
-                    cleaned_msg, flags = parse_flags(msg_text)
-                    cleaned_msg_l = cleaned_msg.lower()
-                    should_gen = False
-
-                    gen_temp = flags["temp"] if flags["temp"] is not None else current_temperature
-                    gen_nick = flags["imitate"] if flags["imitate"] else BOT_NICK_DEFAULT
-                    gen_start = flags["start"]
-
-                    if cleaned_msg_l.startswith(T_IMITATE):
-                        legacy_name = cleaned_msg[len(T_IMITATE):].strip()
-                        if not flags["imitate"] and legacy_name: gen_nick = legacy_name
-                        should_gen = True
-                    elif T_GEN in cleaned_msg_l or (T_SON in cleaned_msg_l and real_user == ADMIN_USER):
-                        should_gen = True
-
-                    if should_gen:
-                        log(f"[{loc}] Generating...")
-                        prompt = "\n".join(histories[loc]) + f"\n[*{my_id}] {gen_nick}: {gen_start}"
-                        
-                        loop = asyncio.get_running_loop()
-                        output = await loop.run_in_executor(executor, do_generate, prompt, gen_temp)
-                        response = (gen_start + " " + output.strip()).strip()
-                        
-                        if response:
-                            await ws.send(json.dumps({
-                                "kind": "chat",
-                                "nickname": gen_nick,
-                                "message": response,
-                                "location": loc,
-                                "color": 0
-                            }))
-                            histories[loc].append(f"[*{my_id}] {gen_nick}: {response}")
+                    # Note: Legacy triggers like "my son" are now handled through the
+                    # command dispatcher. The old inline generation logic has been
+                    # replaced by the standardized command system in commands.py
 
             except websockets.ConnectionClosed:
                 log(f"Lost connection to {url}. Reconnecting...")
