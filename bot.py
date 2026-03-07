@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import os
 import sys
@@ -13,8 +12,10 @@ import websockets
 from commands import CommandContext, create_dispatcher
 from permissions import PermissionManager
 
-WORLD_URL = "wss://ourworldoftext.com/ws/"
-NETWORK_URL = "wss://ourworldoftext.com/...network/ws/"
+WORLD_NAME = os.getenv("OWOT_WORLD_NAME", "")
+BOT_DOMAIN = os.getenv("OWOT_DOMAIN", "ourworldoftext.com")
+NETWORK_DOMAIN = os.getenv("OWOT_NETWORK_DOMAIN", BOT_DOMAIN)
+NETWORK_WORLD_NAME = os.getenv("OWOT_NETWORK_WORLD_NAME", "...network")
 RUN_NAME = 'owotgpt'
 BOT_NICK_DEFAULT = "OWoTGPT"
 ADMIN_USER = "gimmickCellar"
@@ -23,6 +24,7 @@ MESSAGE_CHAR_LIMIT = 400
 RECONNECT_DELAY_SECONDS = 5
 TIERS_GIST_ID_ENV = "OWOTGPT_TIERS_GIST_ID"
 GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
+OWOT_TOKEN_ENV = "OWOT_TOKEN"
 
 current_temperature = 1.3
 shutdown_event = asyncio.Event()
@@ -61,6 +63,21 @@ async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT):
         "location": loc,
         "color": 0
     }))
+
+
+def build_ws_url(domain: str, world_name: str) -> str:
+    world_name = world_name.strip("/")
+    path = f"/{world_name}/ws/" if world_name else "/ws/"
+    return f"wss://{domain}{path}"
+
+
+def build_headers() -> dict:
+    token = os.getenv(OWOT_TOKEN_ENV, "").strip()
+    if not token:
+        return {}
+    return {
+        "Cookie": f"token={token}"
+    }
 
 
 def load_tiers_from_github() -> bool:
@@ -240,11 +257,13 @@ async def handle_command_response(ws, response_msg, loc, my_id):
 async def handle_websocket(url, is_network=False):
     global histories
 
+    headers = build_headers()
+
     while not shutdown_event.is_set():
         ws = None
         try:
             log(f"Connecting to {url}...")
-            ws = await websockets.connect(url)
+            ws = await websockets.connect(url, additional_headers=headers or None)
             my_id = "0"
 
             if is_network:
@@ -304,9 +323,12 @@ async def handle_websocket(url, is_network=False):
 
 
 async def main():
+    world_url = build_ws_url(BOT_DOMAIN, WORLD_NAME)
+    network_url = build_ws_url(NETWORK_DOMAIN, NETWORK_WORLD_NAME)
+
     tasks = [
-        asyncio.create_task(handle_websocket(WORLD_URL, is_network=False)),
-        asyncio.create_task(handle_websocket(NETWORK_URL, is_network=True))
+        asyncio.create_task(handle_websocket(world_url, is_network=False)),
+        asyncio.create_task(handle_websocket(network_url, is_network=True))
     ]
 
     try:

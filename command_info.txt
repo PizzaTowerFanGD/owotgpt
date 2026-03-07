@@ -6,6 +6,7 @@ OVERVIEW
 ────────
 OWoTGPT is a GPT-2 powered chatbot for Our World of Text (OWoT).
 It generates contextual responses based on conversation history.
+It connects entirely over WebSockets, and authenticated chat only needs the OWOT `token` cookie via `OWOT_TOKEN`.
 
 BASIC USAGE
 ───────────
