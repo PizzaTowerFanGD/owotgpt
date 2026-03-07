@@ -1,7 +1,7 @@
 # Admin Management System
 
 ## Overview
-The bot now features a tiered permission system with persistent storage. User tiers are saved to `user_permissions.json` and persist across bot restarts.
+The bot now features a tiered permission system with persistent storage. User tiers are saved to `user_permissions.json` locally and can also be synced through a GitHub gist so they persist between GitHub Actions runs.
 
 ## Permission Tiers
 
@@ -16,8 +16,9 @@ The bot now features a tiered permission system with persistent storage. User ti
 
 ### Admin
 - Has all Moderator permissions
-- Can manage user tiers with: `tier`, `untier`, `listtiers`
+- Can manage user tiers with: `tier`, `untier`, `listtiers`, `kill`
 - Full control over the bot's permission system
+- Can immediately stop the bot with `kill`
 
 ### Banned
 - Cannot use any bot commands
@@ -54,9 +55,15 @@ List all users with custom tiers.
   • banned1: banned
 ```
 
+### `kill`
+Immediately stop the bot process.
+
+**Example:**
+- `kill` - Sends a shutdown message, closes websocket handling, and exits the run
+
 ## User Commands
 
-### `checktier` or `tier`
+### `checktier`
 Check your current permission tier and privileges.
 
 **Example output:**
@@ -73,6 +80,21 @@ Commands require specific tiers to use:
 
 ## Storage
 User tiers are automatically saved to `user_permissions.json`. This file is created automatically and ignored by git to protect user privacy.
+
+To persist tiers between GitHub Actions runs, set these environment variables for the bot run:
+- `OWOTGPT_TIERS_GIST_ID` - the gist ID that stores `user_permissions.json`
+- `GITHUB_TOKEN` - token used to read and update that gist
+
+On startup the bot will try to load tiers from the gist. Whenever `tier` or `untier` changes data, it will push the updated JSON back to the gist.
+
+## OWOT Authentication
+OWOT chat runs over WebSockets and only needs the `token` cookie for authentication. To run the bot as a logged-in account, copy your browser's `token` cookie value and provide it as the `OWOT_TOKEN` environment variable. No CSRF token is needed for chat.
+
+You can also configure the websocket targets with:
+- `OWOT_WORLD_NAME` - world name for the main bot connection, empty for the front page
+- `OWOT_DOMAIN` - websocket domain for the main connection, defaults to `ourworldoftext.com`
+- `OWOT_NETWORK_WORLD_NAME` - world name for the network connection, defaults to `...network`
+- `OWOT_NETWORK_DOMAIN` - domain for the network connection, defaults to `OWOT_DOMAIN`
 
 ## Initial Setup
 The admin user specified in `bot.py` (default: `gimmickCellar`) is automatically set to admin tier on bot startup.
