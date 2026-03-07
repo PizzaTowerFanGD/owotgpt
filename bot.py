@@ -2,8 +2,11 @@ import asyncio
 import json
 import os
 import sys
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from http.cookiejar import CookieJar
 
 import gpt_2_simple as gpt2
 import tensorflow as tf
@@ -25,6 +28,10 @@ RECONNECT_DELAY_SECONDS = 5
 TIERS_GIST_ID_ENV = "OWOTGPT_TIERS_GIST_ID"
 GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
 OWOT_TOKEN_ENV = "OWOT_TOKEN"
+OWOT_PASSWORD_ENV = "OWOT_PASSWORD"
+BOT_LOGIN_NAME = "owotgpt."
+UVIAS_LOGIN_URL = "https://uvias.com/api/auth/uvias"
+OWOT_TOKEN_CHECK_URL = "https://ourworldoftext.com/accounts/member_autocomplete/"
 
 current_temperature = 1.3
 shutdown_event = None
@@ -71,10 +78,63 @@ def build_ws_url(domain: str, world_name: str) -> str:
     return f"wss://{domain}{path}"
 
 
-def build_headers() -> dict:
+def check_token(token: str) -> bool:
+    request = urllib.request.Request(
+        OWOT_TOKEN_CHECK_URL,
+        headers={"Cookie": f"token={token}"}
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            status_code = getattr(response, "status", response.getcode())
+            return status_code not in {403, 500}
+    except Exception:
+        return False
+
+
+def login_with_password(password: str) -> str:
+    login_data = urllib.parse.urlencode({
+        "service": "uvias",
+        "loginname": BOT_LOGIN_NAME,
+        "pass": password,
+        "persistent": "on"
+    }).encode("utf-8")
+
+    cookie_jar = CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    request = urllib.request.Request(UVIAS_LOGIN_URL, data=login_data, method="POST")
+
+    with opener.open(request, timeout=15):
+        pass
+
+    for cookie in cookie_jar:
+        if cookie.name == "uviastoken":
+            return cookie.value
+
+    raise RuntimeError("No uviastoken cookie returned from login.")
+
+
+def get_auth_token() -> str:
     token = os.getenv(OWOT_TOKEN_ENV, "").strip()
-    if not token:
-        return {}
+    if token:
+        if check_token(token):
+            return token
+        log("OWOT_TOKEN is invalid; falling back to password login.")
+
+    password = os.getenv(OWOT_PASSWORD_ENV, "").strip()
+    if not password:
+        raise RuntimeError(
+            f"Missing authentication. Set {OWOT_TOKEN_ENV} or {OWOT_PASSWORD_ENV}."
+        )
+
+    token = login_with_password(password)
+    if not check_token(token):
+        raise RuntimeError("Password login succeeded but returned an invalid token.")
+    return token
+
+
+def build_headers() -> dict:
+    token = get_auth_token()
     return {
         "Cookie": f"token={token}"
     }

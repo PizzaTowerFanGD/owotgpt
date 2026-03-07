@@ -88,7 +88,11 @@ To persist tiers between GitHub Actions runs, set these environment variables fo
 On startup the bot will try to load tiers from the gist. Whenever `tier` or `untier` changes data, it will push the updated JSON back to the gist.
 
 ## OWOT Authentication
-OWOT chat runs over WebSockets and only needs the `token` cookie for authentication. To run the bot as a logged-in account, copy your browser's `token` cookie value and provide it as the `OWOT_TOKEN` environment variable. No CSRF token is needed for chat.
+OWOT chat runs over WebSockets and only needs the `token` cookie for authentication. The bot now prefers logging in as `owotgpt.` using the password provided in `OWOT_PASSWORD`, then reuses the returned token cookie for chat. If you already have a valid token cookie, you can still provide it directly via `OWOT_TOKEN`.
+
+Authentication env vars:
+- `OWOT_PASSWORD` - password for the `owotgpt.` account
+- `OWOT_TOKEN` - optional existing token cookie; if invalid, the bot falls back to password login
 
 You can also configure the websocket targets with:
 - `OWOT_WORLD_NAME` - world name for the main bot connection, empty for the front page
