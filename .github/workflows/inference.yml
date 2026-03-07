@@ -1,7 +1,23 @@
 name: OWoTGPT Runner
 
 on:
-  workflow_dispatch: # Allows manual start from the Actions tab
+  workflow_dispatch:
+    inputs:
+      owot_token:
+        description: "Optional OWOT token cookie to use for this run"
+        required: false
+      owot_password:
+        description: "Optional OWOT password for the owotgpt. account"
+        required: false
+      github_token:
+        description: "Optional GitHub token for gist sync or release access"
+        required: false
+      world_name:
+        description: "Optional OWOT world name for the main connection"
+        required: false
+      network_world_name:
+        description: "Optional OWOT world name for the network connection"
+        required: false
 
 jobs:
   run-bot:
@@ -24,7 +40,7 @@ jobs:
           # Downloads the owotgpt.tar file from your latest GitHub Release
           gh release download --pattern 'owotgpt.tar'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.event.inputs.github_token || secrets.GITHUB_TOKEN }}
 
       - name: Extract Model
         run: |
@@ -33,6 +49,12 @@ jobs:
           tar -xvf owotgpt.tar
 
       - name: Run OWoTGPT Bot
+        env:
+          OWOT_TOKEN: ${{ github.event.inputs.owot_token }}
+          OWOT_PASSWORD: ${{ github.event.inputs.owot_password }}
+          GITHUB_TOKEN: ${{ github.event.inputs.github_token || secrets.GITHUB_TOKEN }}
+          OWOT_WORLD_NAME: ${{ github.event.inputs.world_name }}
+          OWOT_NETWORK_WORLD_NAME: ${{ github.event.inputs.network_world_name }}
         run: |
           # 21000s = 5 hours 50 minutes. 
           # This allows the bot to run almost the full 6h Action limit.

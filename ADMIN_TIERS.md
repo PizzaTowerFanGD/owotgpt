@@ -94,6 +94,13 @@ Authentication env vars:
 - `OWOT_PASSWORD` - password for the `owotgpt.` account
 - `OWOT_TOKEN` - optional existing token cookie; if invalid, the bot falls back to password login
 
+For the GitHub Actions runner, you can now provide these directly when manually starting the `OWoTGPT Runner` workflow:
+- `owot_password` - maps to `OWOT_PASSWORD`
+- `owot_token` - maps to `OWOT_TOKEN`
+- `github_token` - overrides `secrets.GITHUB_TOKEN` for release downloads and gist sync
+- `world_name` - maps to `OWOT_WORLD_NAME`
+- `network_world_name` - maps to `OWOT_NETWORK_WORLD_NAME`
+
 You can also configure the websocket targets with:
 - `OWOT_WORLD_NAME` - world name for the main bot connection, empty for the front page
 - `OWOT_DOMAIN` - websocket domain for the main connection, defaults to `ourworldoftext.com`
