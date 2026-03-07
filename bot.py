@@ -27,7 +27,7 @@ GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
 OWOT_TOKEN_ENV = "OWOT_TOKEN"
 
 current_temperature = 1.3
-shutdown_event = asyncio.Event()
+shutdown_event = None
 
 
 def log(msg):
@@ -205,7 +205,7 @@ def do_generate(prompt_str, temp):
 
 
 async def shutdown_bot(reason: str):
-    if shutdown_event.is_set():
+    if shutdown_event is None or shutdown_event.is_set():
         return
     log(reason)
     shutdown_event.set()
@@ -323,6 +323,9 @@ async def handle_websocket(url, is_network=False):
 
 
 async def main():
+    global shutdown_event
+
+    shutdown_event = asyncio.Event()
     world_url = build_ws_url(BOT_DOMAIN, WORLD_NAME)
     network_url = build_ws_url(NETWORK_DOMAIN, NETWORK_WORLD_NAME)
 
@@ -345,5 +348,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log("Keyboard interrupt received. Exiting bot.")
-        shutdown_event.set()
         sys.exit(0)
