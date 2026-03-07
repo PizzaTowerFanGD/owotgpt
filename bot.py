@@ -317,11 +317,11 @@ async def handle_command_response(ws, response_msg, loc, my_id):
 async def handle_websocket(url, is_network=False):
     global histories
 
-    headers = build_headers()
-
     while not shutdown_event.is_set():
         ws = None
+        headers = None
         try:
+            headers = build_headers()
             log(f"Connecting to {url}...")
             ws = await websockets.connect(url, additional_headers=headers or None)
             my_id = "0"
@@ -371,7 +371,8 @@ async def handle_websocket(url, is_network=False):
         except Exception as exc:
             if shutdown_event.is_set():
                 break
-            log(f"Error on {url}: {exc}. Reconnecting in {RECONNECT_DELAY_SECONDS}s...")
+            error_context = "authentication" if headers is None else "connection"
+            log(f"Error during {error_context} setup for {url}: {exc}. Reconnecting in {RECONNECT_DELAY_SECONDS}s...")
         finally:
             if ws is not None:
                 with suppress(Exception):
