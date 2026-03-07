@@ -18,7 +18,7 @@ from permissions import PermissionManager
 WORLD_NAME = os.getenv("OWOT_WORLD_NAME", "")
 BOT_DOMAIN = os.getenv("OWOT_DOMAIN", "ourworldoftext.com")
 NETWORK_DOMAIN = os.getenv("OWOT_NETWORK_DOMAIN", BOT_DOMAIN)
-NETWORK_WORLD_NAME = os.getenv("OWOT_NETWORK_WORLD_NAME", "...network")
+NETWORK_WORLD_NAME = "...network"
 RUN_NAME = 'owotgpt'
 BOT_NICK_DEFAULT = "OWoTGPT"
 ADMIN_USER = "gimmickCellar"
