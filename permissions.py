@@ -7,7 +7,7 @@ Handles user tiers and permission checking.
 import json
 import os
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict
 
 
 class UserTier(str, Enum):
@@ -28,7 +28,7 @@ class PermissionManager:
 
     def ensure_admin(self, admin_username: str) -> None:
         """Ensure the specified admin user has admin tier."""
-        if admin_username:
+        if admin_username and self.get_tier(admin_username) != UserTier.ADMIN:
             self.set_tier(admin_username, UserTier.ADMIN)
 
     def load(self) -> None:
@@ -37,7 +37,7 @@ class PermissionManager:
             try:
                 with open(self.storage_file, 'r') as f:
                     data = json.load(f)
-                    self.users = {k: UserTier(v) for k, v in data.items()}
+                    self.users = {k.lower(): UserTier(v) for k, v in data.items()}
             except (json.JSONDecodeError, ValueError) as e:
                 print(f"Warning: Failed to load permissions file: {e}")
                 self.users = {}
@@ -45,7 +45,16 @@ class PermissionManager:
     def save(self) -> None:
         """Save user permissions to JSON file."""
         with open(self.storage_file, 'w') as f:
-            json.dump({k: v.value for k, v in self.users.items()}, f, indent=2)
+            json.dump({k: v.value for k, v in self.users.items()}, f, indent=2, sort_keys=True)
+
+    def export(self) -> Dict[str, str]:
+        """Return a JSON-serializable snapshot of all custom user tiers."""
+        return {k: v.value for k, v in self.users.items()}
+
+    def replace_all(self, users: Dict[str, str]) -> None:
+        """Replace all stored tiers with the provided mapping."""
+        self.users = {k.lower(): UserTier(v) for k, v in users.items()}
+        self.save()
 
     def get_tier(self, username: str) -> UserTier:
         """Get the permission tier for a user."""
@@ -71,7 +80,7 @@ class PermissionManager:
         Banned users cannot use any commands.
         """
         user_tier = self.get_tier(username)
-        
+
         if user_tier == UserTier.BANNED:
             return False
 
@@ -81,7 +90,7 @@ class PermissionManager:
             UserTier.USER: 1,
             UserTier.BANNED: 0
         }
-        
+
         return tier_hierarchy[user_tier] >= tier_hierarchy[required_tier]
 
     def is_admin(self, username: str) -> bool:

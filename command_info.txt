@@ -24,7 +24,7 @@ COMMANDS
    Shows bot status including current temperature and context size.
 
 🔍 owotgpt checktier
-   Aliases: checktier, owotgpt tier, tier
+   Aliases: checktier
    Shows your current permission tier.
 
 ✨ owotgpt gen [--temp <value>] [--start <text>] [--imitate <nick>]
@@ -61,17 +61,23 @@ COMMANDS
 ─────────────────
 
 ⚙️  owotgpt tier [--user <username>] [--tier <tier>]
-   Aliases: settier, owotgpt settier, set tier
+   Aliases: tier, settier, owotgpt settier, set tier
    Check or set user permission tiers.
    Tiers: admin, moderator, user, banned
+   Changes also sync to the configured GitHub gist when available.
 
 🗑️  owotgpt untier --user <username>
    Aliases: untier, owotgpt removetier, removetier
    Removes custom tier from a user.
+   Changes also sync to the configured GitHub gist when available.
 
 📋 owotgpt listtiers
    Aliases: listtiers, owotgpt listusers, listusers
    Lists all users with custom tiers.
+
+🛑 owotgpt kill
+   Aliases: kill, owotgpt stop, stop
+   Immediately stops the bot process and ends the run.
 
 AVAILABLE FLAGS
 ───────────────
@@ -105,6 +111,9 @@ owotgpt temp --value 1.5
 → Set global temperature to 1.5
 
 owotgpt tier --user SomeUser --tier moderator
-→ Promote SomeUser to moderator
+→ Promote SomeUser to moderator and sync the change
+
+owotgpt kill
+→ Stop the bot immediately
 
 ═══════════════════════════════════════════════════════════════════

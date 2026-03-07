@@ -48,7 +48,6 @@ class Command:
         text_lower = text.lower().strip()
         for name in self.all_names:
             name_lower = name.lower()
-            # Exact match for short commands, prefix match for longer ones
             if text_lower == name_lower or text_lower.startswith(name_lower + " "):
                 return True
         return False
@@ -86,7 +85,6 @@ class CommandDispatcher:
         """
         text_lower = text.lower().strip()
 
-        # Check for exact matches first
         for cmd in self.commands.values():
             for name in cmd.all_names:
                 name_lower = name.lower()
@@ -109,11 +107,9 @@ class CommandDispatcher:
 
         command, args = result
 
-        # Check if user is banned
         if self.permission_manager.is_banned(ctx.real_user):
             return "🚫 You are banned from using this bot."
 
-        # Check permissions based on tier
         if not self.permission_manager.can_use_command(ctx.real_user, command.required_tier):
             return f"⛔ This command requires {command.required_tier.value} tier or higher."
 
@@ -125,14 +121,12 @@ class CommandDispatcher:
     def get_help(self, ctx: CommandContext, command_name: str = "") -> str:
         """Generate help text for all commands or a specific command."""
         if command_name:
-            # Look up specific command
             cmd_name_lower = command_name.lower()
             cmd = self.commands.get(cmd_name_lower)
             if not cmd:
                 cmd = self.commands.get(self.alias_map.get(cmd_name_lower, ""))
 
             if cmd:
-                # Check permission for this command
                 if not self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier):
                     return f"⛔ Command '{command_name}' requires {cmd.required_tier.value} tier or higher."
 
@@ -148,16 +142,14 @@ class CommandDispatcher:
                 if cmd.help_text:
                     lines.append(f"\n{cmd.help_text}")
                 return "\n".join(lines)
-            else:
-                # Suggest similar commands
-                suggestions = get_close_matches(command_name.lower(),
-                                                list(self.commands.keys()) + list(self.alias_map.keys()),
-                                                n=2, cutoff=0.5)
-                if suggestions:
-                    return f"❓ Unknown command '{command_name}'. Did you mean: {', '.join(suggestions)}?"
-                return f"❓ Unknown command '{command_name}'. Type 'help' for available commands."
 
-        # General help - filter by permissions
+            suggestions = get_close_matches(command_name.lower(),
+                                            list(self.commands.keys()) + list(self.alias_map.keys()),
+                                            n=2, cutoff=0.5)
+            if suggestions:
+                return f"❓ Unknown command '{command_name}'. Did you mean: {', '.join(suggestions)}?"
+            return f"❓ Unknown command '{command_name}'. Type 'help' for available commands."
+
         lines = ["📚 Available Commands:"]
         user_commands = []
         mod_commands = []
@@ -178,7 +170,7 @@ class CommandDispatcher:
 
         lines.extend(user_commands)
 
-        if mod_commands and (self.permission_manager.is_moderator(ctx.real_user)):
+        if mod_commands and self.permission_manager.is_moderator(ctx.real_user):
             lines.append("\n🔹 Moderator Commands:")
             lines.extend(mod_commands)
 
@@ -219,8 +211,6 @@ def parse_flags(text: str, valid_flags: list = None) -> tuple[str, dict]:
     flags = {}
     cleaned_text = text
 
-    # Find all --flag value patterns
-    # Pattern captures: flag name in group 1, value in group 2 (everything until next -- or end)
     if valid_flags is None:
         pattern = r'--(\w+)\s+((?:(?!--).)+)'
     else:
@@ -232,34 +222,25 @@ def parse_flags(text: str, valid_flags: list = None) -> tuple[str, dict]:
         if isinstance(match, tuple):
             flag_name, flag_value = match
         else:
-            # Single group match - shouldn't happen with this pattern
             continue
 
         flag_name = flag_name.lower()
         val = flag_value.strip()
 
-        # When valid_flags is None, we need to validate the flag name ourselves
         if valid_flags is not None:
             valid_names = [f.lower() for f in valid_flags]
             if flag_name not in valid_names:
                 continue
 
         flags[flag_name] = val
-
-        # Remove the flag from cleaned text
         cleaned_text = re.sub(rf'--{re.escape(match[0])}\s+{re.escape(flag_value)}',
                               '', cleaned_text, flags=re.IGNORECASE).strip()
 
     return cleaned_text, flags
 
 
-# ============================================================================
-# Command Handlers
-# ============================================================================
-
 def handle_help(ctx: CommandContext, args: str) -> str:
     """Handle help command - shows general or specific command help."""
-    # Create dispatcher to access get_help
     dispatcher = create_dispatcher(ctx.permission_manager)
     return dispatcher.get_help(ctx, args.strip())
 
@@ -284,10 +265,8 @@ def handle_clear(ctx: CommandContext, args: str) -> str:
 def handle_temp(ctx: CommandContext, args: str) -> Optional[str]:
     """Handle temp command - sets global temperature."""
     cleaned_args, flags = parse_flags(args, valid_flags=["value"])
-    
-    # Use --value flag if provided, otherwise use positional argument
     temp_val = flags.get("value", cleaned_args.strip() if cleaned_args else None)
-    
+
     if not temp_val:
         return f"🌡️ Current temperature: {ctx.current_temperature}\nUsage: temp <value> (0.1-2.0) or temp --value <value>"
 
@@ -300,13 +279,9 @@ def handle_temp(ctx: CommandContext, args: str) -> Optional[str]:
 
 
 def handle_gen(ctx: CommandContext, args: str) -> str:
-    """
-    Handle gen command - triggers text generation.
-    Returns a special marker that bot.py will intercept to trigger generation.
-    """
-    cleaned_args, flags = parse_flags(args, valid_flags=["temp", "start", "imitate"])
-    
-    # Parse --temp flag with validation
+    """Handle gen command - triggers text generation."""
+    _, flags = parse_flags(args, valid_flags=["temp", "start", "imitate"])
+
     gen_temp = ctx.current_temperature
     if "temp" in flags:
         try:
@@ -314,22 +289,16 @@ def handle_gen(ctx: CommandContext, args: str) -> str:
             gen_temp = max(0.1, min(2.0, temp_val))
         except ValueError:
             pass
-    
+
     gen_nick = flags.get("imitate", ctx.bot_nick_default)
     gen_start = flags.get("start", "")
-
-    # Return marker with generation parameters
     return f"GEN_TRIGGER:{gen_temp}|{gen_nick}|{gen_start}"
 
 
 def handle_imitate(ctx: CommandContext, args: str) -> str:
-    """
-    Handle imitate command - triggers generation with custom nickname.
-    Supports both legacy syntax and --nick flag.
-    """
+    """Handle imitate command - triggers generation with custom nickname."""
     cleaned_args, flags = parse_flags(args, valid_flags=["nick", "temp", "start"])
 
-    # Use --nick flag if provided, otherwise use the first positional argument
     gen_nick = flags.get("nick")
     if not gen_nick and cleaned_args:
         gen_nick = cleaned_args.split()[0]
@@ -337,7 +306,6 @@ def handle_imitate(ctx: CommandContext, args: str) -> str:
     if not gen_nick:
         return "❌ Please specify a nickname to imitate.\nUsage: imitate --nick <nickname> [--temp <value>] [--start <text>] or imitate <nickname>"
 
-    # Parse --temp flag with validation
     gen_temp = ctx.current_temperature
     if "temp" in flags:
         try:
@@ -345,9 +313,8 @@ def handle_imitate(ctx: CommandContext, args: str) -> str:
             gen_temp = max(0.1, min(2.0, temp_val))
         except ValueError:
             pass
-    
-    gen_start = flags.get("start", "")
 
+    gen_start = flags.get("start", "")
     return f"GEN_TRIGGER:{gen_temp}|{gen_nick}|{gen_start}"
 
 
@@ -355,11 +322,9 @@ def handle_tier(ctx: CommandContext, args: str) -> str:
     """Handle tier command - check or set user tiers (admin only)."""
     cleaned_args, flags = parse_flags(args, valid_flags=["user", "tier"])
 
-    # Use flags if provided
     username = flags.get("user")
     tier_name = flags.get("tier")
 
-    # Fall back to positional args
     if not username and not tier_name and cleaned_args:
         parts = cleaned_args.split(maxsplit=1)
         if len(parts) == 1:
@@ -367,23 +332,18 @@ def handle_tier(ctx: CommandContext, args: str) -> str:
         else:
             username, tier_name = parts[0], parts[1]
     elif username and not tier_name and cleaned_args:
-        # --user provided, positional arg is tier
         tier_name = cleaned_args.strip()
     elif tier_name and not username and cleaned_args:
-        # --tier provided, positional arg is user
         username = cleaned_args.strip()
-    
-    # Show current user's tier
+
     if not username:
         user_tier = ctx.permission_manager.get_tier(ctx.real_user)
         return f"👤 Your tier: {user_tier.value}"
 
-    # Show specific user's tier
     if not tier_name:
         tier = ctx.permission_manager.get_tier(username)
         return f"👤 {username}'s tier: {tier.value}"
 
-    # Set user's tier
     tier_name = tier_name.lower()
     valid_tiers = [t.value for t in UserTier]
     if tier_name not in valid_tiers:
@@ -392,7 +352,7 @@ def handle_tier(ctx: CommandContext, args: str) -> str:
     try:
         new_tier = UserTier(tier_name)
         ctx.permission_manager.set_tier(username, new_tier)
-        return f"✅ Set {username}'s tier to {new_tier.value}"
+        return f"SYNC_TIERS:✅ Set {username}'s tier to {new_tier.value}"
     except ValueError:
         return f"❌ Invalid tier: {tier_name}"
 
@@ -400,16 +360,14 @@ def handle_tier(ctx: CommandContext, args: str) -> str:
 def handle_untier(ctx: CommandContext, args: str) -> str:
     """Handle untier command - remove custom tier from user (admin only)."""
     cleaned_args, flags = parse_flags(args, valid_flags=["user"])
-    
     username = flags.get("user", cleaned_args.strip() if cleaned_args else None)
-    
+
     if not username:
         return "❌ Usage: untier --user <username> or untier <username>"
 
     if ctx.permission_manager.remove_user(username):
-        return f"✅ Removed custom tier from {username} (reverted to user)"
-    else:
-        return f"❓ {username} doesn't have a custom tier"
+        return f"SYNC_TIERS:✅ Removed custom tier from {username} (reverted to user)"
+    return f"❓ {username} doesn't have a custom tier"
 
 
 def handle_listtiers(ctx: CommandContext, args: str) -> str:
@@ -439,11 +397,15 @@ def handle_checktier(ctx: CommandContext, args: str) -> str:
     return "\n".join(lines)
 
 
+def handle_kill(ctx: CommandContext, args: str) -> str:
+    """Handle kill command - immediately stop the bot."""
+    return "KILL_BOT:🛑 Kill command received. Shutting down immediately."
+
+
 def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatcher:
     """Create and configure the command dispatcher with all commands."""
     dispatcher = CommandDispatcher(permission_manager)
 
-    # Help command
     dispatcher.register(Command(
         name="owotgpt help",
         handler=handle_help,
@@ -454,7 +416,6 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         help_text="Without arguments, shows all available commands. With a command name, shows detailed usage."
     ))
 
-    # Info command
     dispatcher.register(Command(
         name="owotgpt info",
         handler=handle_info,
@@ -464,7 +425,6 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         usage="info"
     ))
 
-    # Checktier command
     dispatcher.register(Command(
         name="owotgpt checktier",
         handler=handle_checktier,
@@ -475,7 +435,6 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         help_text="Shows your current tier and what privileges you have."
     ))
 
-    # Clear command (moderator)
     dispatcher.register(Command(
         name="owotgpt clear",
         handler=handle_clear,
@@ -485,7 +444,6 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         usage="clear"
     ))
 
-    # Temp command (moderator)
     dispatcher.register(Command(
         name="owotgpt temp",
         handler=handle_temp,
@@ -496,7 +454,6 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         help_text="Temperature controls randomness. Lower values (0.1-0.5) produce more focused text, higher values (1.0-2.0) produce more creative text."
     ))
 
-    # Gen command
     dispatcher.register(Command(
         name="owotgpt gen",
         handler=handle_gen,
@@ -507,7 +464,6 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         help_text="Generates text based on conversation context. Use --temp to override temperature, --start to provide seed text, --imitate to use a custom nickname."
     ))
 
-    # Imitate command
     dispatcher.register(Command(
         name="owotgpt imitate",
         handler=handle_imitate,
@@ -518,18 +474,16 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         help_text="Similar to gen, but uses a custom nickname for the response. Supports --nick, --temp, and --start flags."
     ))
 
-    # Tier command (admin)
     dispatcher.register(Command(
         name="owotgpt tier",
         handler=handle_tier,
-        aliases=["settier", "owotgpt settier", "set tier"],
+        aliases=["tier", "settier", "owotgpt settier", "set tier"],
         required_tier=UserTier.ADMIN,
         description="Set or check user tiers",
         usage="tier [--user <username>] [--tier <admin|moderator|user|banned>] or tier [username] [tier]",
         help_text="Without arguments: shows your tier. With --user: shows that user's tier. With --user and --tier: sets the user's tier. Changes are saved permanently."
     ))
 
-    # Untier command (admin)
     dispatcher.register(Command(
         name="owotgpt untier",
         handler=handle_untier,
@@ -540,7 +494,6 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         help_text="Removes a user's custom tier, reverting them to 'user' tier."
     ))
 
-    # Listtiers command (admin)
     dispatcher.register(Command(
         name="owotgpt listtiers",
         handler=handle_listtiers,
@@ -551,7 +504,16 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         help_text="Shows all users who have been assigned non-default tiers."
     ))
 
-    # Legacy "my son" trigger (moderator)
+    dispatcher.register(Command(
+        name="owotgpt kill",
+        handler=handle_kill,
+        aliases=["kill", "owotgpt stop", "stop"],
+        required_tier=UserTier.ADMIN,
+        description="Immediately stop the bot",
+        usage="kill",
+        help_text="Stops all websocket handling and exits the process right away."
+    ))
+
     dispatcher.register(Command(
         name="my son",
         handler=handle_gen,

@@ -1,45 +1,42 @@
 import asyncio
+import base64
 import json
-import websockets
-import gpt_2_simple as gpt2
-import tensorflow as tf # Required to fix the Graph error
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 
-from commands import CommandDispatcher, CommandContext, create_dispatcher, parse_flags
+import gpt_2_simple as gpt2
+import tensorflow as tf
+import websockets
+
+from commands import CommandContext, create_dispatcher
 from permissions import PermissionManager
 
-# --- CONFIGURATION ---
 WORLD_URL = "wss://ourworldoftext.com/ws/"
 NETWORK_URL = "wss://ourworldoftext.com/...network/ws/"
 RUN_NAME = 'owotgpt'
 BOT_NICK_DEFAULT = "OWoTGPT"
 ADMIN_USER = "gimmickCellar"
 CONTEXT_LIMIT = 15
-MESSAGE_CHAR_LIMIT = 400  # OWOT message character limit
+MESSAGE_CHAR_LIMIT = 400
+RECONNECT_DELAY_SECONDS = 5
+TIERS_GIST_ID_ENV = "OWOTGPT_TIERS_GIST_ID"
+GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
 
-# Global state
 current_temperature = 1.3
+shutdown_event = asyncio.Event()
 
-# Legacy triggers (kept for reference, now handled by command dispatcher)
-# T_GEN = "owotgpt gen", T_SON = "my son", T_CLEAR = "owotgpt clear"
-# T_IMITATE = "owotgpt imitate", T_HELP = "owotgpt help"
-# T_TEMP = "owotgpt temp", T_INFO = "owotgpt info"
 
 def log(msg):
     print(msg, flush=True)
 
-# Create global permission manager
-permission_manager = PermissionManager()
-permission_manager.ensure_admin(ADMIN_USER)
 
-# Create global command dispatcher
+permission_manager = PermissionManager()
 command_dispatcher = create_dispatcher(permission_manager)
 
 
 def create_command_context(ws, loc, real_user, my_id, histories, current_temp, perm_manager):
-    """Create a CommandContext with current state."""
     return CommandContext(
         websocket=ws,
         location=loc,
@@ -55,7 +52,6 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp, p
 
 
 async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT):
-    """Send a chat response via websocket, truncating if over character limit."""
     if len(message) > MESSAGE_CHAR_LIMIT:
         message = message[:MESSAGE_CHAR_LIMIT - 3] + "..."
     await ws.send(json.dumps({
@@ -66,15 +62,98 @@ async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT):
         "color": 0
     }))
 
+
+def load_tiers_from_github() -> bool:
+    gist_id = os.getenv(TIERS_GIST_ID_ENV)
+    github_token = os.getenv(GITHUB_TOKEN_ENV)
+    if not gist_id or not github_token:
+        log("Tier sync disabled: missing GitHub gist ID or token.")
+        return False
+
+    import urllib.request
+    import urllib.error
+
+    request = urllib.request.Request(
+        f"https://api.github.com/gists/{gist_id}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_token}",
+            "X-GitHub-Api-Version": "2022-11-28"
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        tier_file = payload.get("files", {}).get("user_permissions.json", {})
+        content = tier_file.get("content")
+        truncated = tier_file.get("truncated", False)
+        if not content or truncated:
+            log("No remote tier data found in gist.")
+            return False
+        permission_manager.replace_all(json.loads(content))
+        permission_manager.ensure_admin(ADMIN_USER)
+        log("Loaded user tiers from GitHub gist.")
+        return True
+    except urllib.error.HTTPError as exc:
+        log(f"Failed to load tiers from GitHub gist: HTTP {exc.code}")
+    except Exception as exc:
+        log(f"Failed to load tiers from GitHub gist: {exc}")
+    return False
+
+
+def save_tiers_to_github() -> bool:
+    gist_id = os.getenv(TIERS_GIST_ID_ENV)
+    github_token = os.getenv(GITHUB_TOKEN_ENV)
+    if not gist_id or not github_token:
+        return False
+
+    import urllib.request
+    import urllib.error
+
+    body = json.dumps({
+        "files": {
+            "user_permissions.json": {
+                "content": json.dumps(permission_manager.export(), indent=2, sort_keys=True)
+            }
+        }
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        f"https://api.github.com/gists/{gist_id}",
+        data=body,
+        method="PATCH",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json"
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30):
+            pass
+        log("Synced user tiers to GitHub gist.")
+        return True
+    except urllib.error.HTTPError as exc:
+        log(f"Failed to sync tiers to GitHub gist: HTTP {exc.code}")
+    except Exception as exc:
+        log(f"Failed to sync tiers to GitHub gist: {exc}")
+    return False
+
+
 log("--- Starting Bot Initialization ---")
 if not os.path.exists(os.path.join('checkpoint', RUN_NAME)):
     log(f"ERROR: checkpoint/{RUN_NAME} not found.")
     sys.exit(1)
 
+load_tiers_from_github()
+permission_manager.ensure_admin(ADMIN_USER)
+
 log("Loading GPT-2 model...")
-# Fix: Keep reference to the session and the computation graph
 sess = gpt2.start_tf_sess()
-graph = tf.compat.v1.get_default_graph() 
+graph = tf.compat.v1.get_default_graph()
 gpt2.load_gpt2(sess, run_name=RUN_NAME)
 log("Model loaded successfully!")
 
@@ -86,6 +165,7 @@ histories = {
     "network": []
 }
 
+
 def format_message(msg_data):
     mid = msg_data.get("id", "0")
     nick = msg_data.get("nickname", "")
@@ -95,10 +175,9 @@ def format_message(msg_data):
     if is_registered:
         display_name = nick if nick and nick.lower() != real_user.lower() else real_user
         return f"[*{mid}] {display_name}: {text}"
-    else:
-        return f"[*{mid}] {nick}: {text}" if nick else f"[{mid}]: {text}"
+    return f"[*{mid}] {nick}: {text}" if nick else f"[{mid}]: {text}"
 
-# Generation wrapper with Graph safety
+
 def do_generate(prompt_str, temp):
     with graph.as_default():
         with sess.as_default():
@@ -107,106 +186,142 @@ def do_generate(prompt_str, temp):
                 prefix=prompt_str, return_as_list=True, include_prefix=False, truncate='\n'
             )[0]
 
+
+async def shutdown_bot(reason: str):
+    if shutdown_event.is_set():
+        return
+    log(reason)
+    shutdown_event.set()
+
+
+async def handle_command_response(ws, response_msg, loc, my_id):
+    global current_temperature
+
+    if response_msg.startswith("GEN_TRIGGER:"):
+        _, params = response_msg.split(":", 1)
+        gen_temp_str, gen_nick, gen_start = params.split("|", 2)
+        gen_temp = float(gen_temp_str)
+
+        log(f"[{loc}] Generating...")
+        prompt = "\n".join(histories[loc]) + f"\n[*{my_id}] {gen_nick}: {gen_start}"
+
+        loop = asyncio.get_running_loop()
+        output = await loop.run_in_executor(executor, do_generate, prompt, gen_temp)
+        gen_response = (gen_start + " " + output.strip()).strip()
+
+        if gen_response:
+            await send_response(ws, gen_response, loc, gen_nick)
+            histories[loc].append(f"[*{my_id}] {gen_nick}: {gen_response}")
+        return
+
+    if response_msg.startswith("SET_TEMP:"):
+        _, temp_str = response_msg.split(":", 1)
+        current_temperature = float(temp_str)
+        await send_response(ws, f"🌡️ Global temperature set to {current_temperature}", loc)
+        return
+
+    if response_msg.startswith("SYNC_TIERS:"):
+        _, user_message = response_msg.split(":", 1)
+        synced = save_tiers_to_github()
+        suffix = " (synced to GitHub)" if synced else ""
+        await send_response(ws, f"{user_message}{suffix}", loc)
+        return
+
+    if response_msg.startswith("KILL_BOT:"):
+        _, user_message = response_msg.split(":", 1)
+        with suppress(Exception):
+            await send_response(ws, user_message, loc)
+        await shutdown_bot("Kill command triggered. Exiting bot.")
+        return
+
+    await send_response(ws, response_msg, loc)
+
+
 async def handle_websocket(url, is_network=False):
-    global histories, current_temperature
-    log(f"Connecting to {url}...")
-    
-    async with websockets.connect(url) as ws:
-        my_id = "0"
-        if is_network:
-            await ws.send(json.dumps({"kind": "chathistory"}))
-        
-        while True:
-            try:
+    global histories
+
+    while not shutdown_event.is_set():
+        ws = None
+        try:
+            log(f"Connecting to {url}...")
+            ws = await websockets.connect(url)
+            my_id = "0"
+
+            if is_network:
+                await ws.send(json.dumps({"kind": "chathistory"}))
+
+            while not shutdown_event.is_set():
                 raw_data = await ws.recv()
                 data = json.loads(raw_data)
-                
+
                 if data.get("kind") == "channel":
                     my_id = data.get("id")
                     log(f"Connected to {url} - ID: {my_id}")
+                    continue
 
-                if data.get("kind") == "chat":
-                    # Self-trigger prevention
-                    sender_id = data.get("id")
-                    if str(sender_id) == str(my_id):
-                        continue
-                    
-                    # IGNORE GLOBAL CHAT ON NETWORK SOCKET
-                    # (Prevent bot from seeing the same global message twice)
-                    if is_network and data.get("location") == "global":
-                        continue
+                if data.get("kind") != "chat":
+                    continue
 
-                    if is_network:
-                        loc = "network"
-                    else:
-                        loc = data.get("location", "page")
-                    
-                    msg_text = data.get("message", "")
-                    real_user = data.get("realUsername", "")
+                sender_id = data.get("id")
+                if str(sender_id) == str(my_id):
+                    continue
 
-                    # Create command context
-                    ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, permission_manager)
+                if is_network and data.get("location") == "global":
+                    continue
 
-                    # Try to dispatch command
-                    response_msg = command_dispatcher.dispatch(msg_text, ctx)
+                loc = "network" if is_network else data.get("location", "page")
+                msg_text = data.get("message", "")
+                real_user = data.get("realUsername", "")
 
-                    if response_msg:
-                        # Handle special command responses
-                        if response_msg.startswith("GEN_TRIGGER:"):
-                            # Parse generation parameters from response marker
-                            _, params = response_msg.split(":", 1)
-                            gen_temp_str, gen_nick, gen_start = params.split("|", 2)
-                            gen_temp = float(gen_temp_str)
+                ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, permission_manager)
+                response_msg = command_dispatcher.dispatch(msg_text, ctx)
 
-                            log(f"[{loc}] Generating...")
-                            prompt = "\n".join(histories[loc]) + f"\n[*{my_id}] {gen_nick}: {gen_start}"
+                if response_msg:
+                    await handle_command_response(ws, response_msg, loc, my_id)
+                    continue
 
-                            loop = asyncio.get_running_loop()
-                            output = await loop.run_in_executor(executor, do_generate, prompt, gen_temp)
-                            gen_response = (gen_start + " " + output.strip()).strip()
+                formatted = format_message(data)
+                histories[loc].append(formatted)
+                if len(histories[loc]) > CONTEXT_LIMIT:
+                    histories[loc].pop(0)
 
-                            if gen_response:
-                                await send_response(ws, gen_response, loc, gen_nick)
-                                histories[loc].append(f"[*{my_id}] {gen_nick}: {gen_response}")
-
-                        elif response_msg.startswith("SET_TEMP:"):
-                            # Update global temperature
-                            _, temp_str = response_msg.split(":", 1)
-                            current_temperature = float(temp_str)
-                            await send_response(ws, f"🌡️ Global temperature set to {current_temperature}", loc)
-
-                        else:
-                            # Regular response
-                            await send_response(ws, response_msg, loc)
-                        continue
-
-                    # Add non-command messages to history
-                    formatted = format_message(data)
-                    histories[loc].append(formatted)
-                    if len(histories[loc]) > CONTEXT_LIMIT:
-                        histories[loc].pop(0)
-
-                    # Note: Legacy triggers like "my son" are now handled through the
-                    # command dispatcher. The old inline generation logic has been
-                    # replaced by the standardized command system in commands.py
-
-            except websockets.ConnectionClosed:
-                log(f"Lost connection to {url}. Reconnecting...")
+        except websockets.ConnectionClosed as exc:
+            if shutdown_event.is_set():
                 break
-            except Exception as e:
-                log(f"Error on {url}: {e}")
+            log(f"Lost connection to {url}: {exc}. Reconnecting in {RECONNECT_DELAY_SECONDS}s...")
+        except Exception as exc:
+            if shutdown_event.is_set():
+                break
+            log(f"Error on {url}: {exc}. Reconnecting in {RECONNECT_DELAY_SECONDS}s...")
+        finally:
+            if ws is not None:
+                with suppress(Exception):
+                    await ws.close()
+
+        if shutdown_event.is_set():
+            break
+        await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+
 
 async def main():
-    while True:
-        # Run both tasks. Gather will restart if one closes.
-        await asyncio.gather(
-            handle_websocket(WORLD_URL, is_network=False),
-            handle_websocket(NETWORK_URL, is_network=True)
-        )
-        await asyncio.sleep(5)
+    tasks = [
+        asyncio.create_task(handle_websocket(WORLD_URL, is_network=False)),
+        asyncio.create_task(handle_websocket(NETWORK_URL, is_network=True))
+    ]
+
+    try:
+        await shutdown_event.wait()
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        executor.shutdown(wait=False, cancel_futures=True)
+
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        log("Keyboard interrupt received. Exiting bot.")
+        shutdown_event.set()
         sys.exit(0)
