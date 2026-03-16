@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from http.cookiejar import CookieJar
 
-import gpt_2_simple as gpt2
-import tensorflow as tf
+import torch
 import websockets
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from commands import CommandContext, create_dispatcher
 from permissions import PermissionManager
@@ -19,7 +19,7 @@ WORLD_NAME = os.getenv("OWOT_WORLD_NAME", "")
 BOT_DOMAIN = os.getenv("OWOT_DOMAIN", "ourworldoftext.com")
 NETWORK_DOMAIN = os.getenv("OWOT_NETWORK_DOMAIN", BOT_DOMAIN)
 NETWORK_WORLD_NAME = "...network"
-RUN_NAME = 'owotgpt'
+MODEL_NAME = "Pomni/owotgpt1.3"
 BOT_NICK_DEFAULT = "OWoTGPT"
 ADMIN_USER = "gimmickCellar"
 CONTEXT_LIMIT = 15
@@ -221,18 +221,20 @@ def save_tiers_to_github() -> bool:
 
 
 log("--- Starting Bot Initialization ---")
-if not os.path.exists(os.path.join('checkpoint', RUN_NAME)):
-    log(f"ERROR: checkpoint/{RUN_NAME} not found.")
-    sys.exit(1)
 
 load_tiers_from_github()
 permission_manager.ensure_admin(ADMIN_USER)
 
-log("Loading GPT-2 model...")
-sess = gpt2.start_tf_sess()
-graph = tf.compat.v1.get_default_graph()
-gpt2.load_gpt2(sess, run_name=RUN_NAME)
-log("Model loaded successfully!")
+log(f"Loading model {MODEL_NAME}...")
+try:
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    log(f"Model loaded successfully on {device}!")
+except Exception as e:
+    log(f"ERROR: Failed to load model: {e}")
+    sys.exit(1)
 
 executor = ThreadPoolExecutor(max_workers=1)
 
@@ -256,12 +258,19 @@ def format_message(msg_data):
 
 
 def do_generate(prompt_str, temp):
-    with graph.as_default():
-        with sess.as_default():
-            return gpt2.generate(
-                sess, run_name=RUN_NAME, length=100, temperature=temp,
-                prefix=prompt_str, return_as_list=True, include_prefix=False, truncate='\n'
-            )[0]
+    inputs = tokenizer(prompt_str, return_tensors="pt").to(device)
+    output = model.generate(
+        **inputs,
+        max_new_tokens=100,
+        temperature=temp,
+        do_sample=True,
+        pad_token_id=tokenizer.eos_token_id
+    )
+    generated = tokenizer.decode(output[0], skip_special_tokens=True)
+    result = generated[len(prompt_str):].strip()
+    if '\n' in result:
+        result = result.split('\n')[0]
+    return result
 
 
 async def shutdown_bot(reason: str):
