@@ -228,7 +228,7 @@ permission_manager.ensure_admin(ADMIN_USER)
 log(f"Loading model {MODEL_NAME}...")
 try:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, use_safetensors=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     log(f"Model loaded successfully on {device}!")
