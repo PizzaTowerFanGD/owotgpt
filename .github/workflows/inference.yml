@@ -35,19 +35,6 @@ jobs:
         run: |
           pip install tensorflow-cpu==2.15.0 gpt-2-simple websockets
 
-      - name: Download Model Assets from Release
-        run: |
-          # Downloads the owotgpt.tar file from your latest GitHub Release
-          gh release download --pattern 'owotgpt.tar'
-        env:
-          GITHUB_TOKEN: ${{ github.event.inputs.github_token || secrets.GITHUB_TOKEN }}
-
-      - name: Extract Model
-        run: |
-          # Since the tar contains the 'checkpoint/owotgpt' folders already,
-          # we just extract it here.
-          tar -xvf owotgpt.tar
-
       - name: Run OWoTGPT Bot
         env:
           OWOT_TOKEN: ${{ github.event.inputs.owot_token }}
