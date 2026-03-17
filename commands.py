@@ -419,7 +419,7 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
     dispatcher.register(Command(
         name="owotgpt info",
         handler=handle_info,
-        aliases=["info", "owotgpt i", "i"],
+        aliases=["info", "owotgpt i"],
         required_tier=UserTier.USER,
         description="Show bot status and configuration",
         usage="info"
