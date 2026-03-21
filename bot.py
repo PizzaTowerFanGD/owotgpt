@@ -25,6 +25,7 @@ ADMIN_USER = "gimmickCellar"
 CONTEXT_LIMIT = 15
 MESSAGE_CHAR_LIMIT = 400
 RECONNECT_DELAY_SECONDS = 5
+MAX_RECONNECT_RETRIES = 12
 TIERS_GIST_ID_ENV = "OWOTGPT_TIERS_GIST_ID"
 GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
 OWOT_TOKEN_ENV = "OWOT_TOKEN"
@@ -325,12 +326,14 @@ async def handle_command_response(ws, response_msg, loc, my_id):
 
 async def handle_websocket(url, is_network=False):
     global histories
+    retry_count = 0
 
     while not shutdown_event.is_set():
         ws = None
         headers = None
         try:
             headers = build_headers()
+            retry_count = 0
             log(f"Connecting to {url}...")
             ws = await websockets.connect(url, additional_headers=headers or None)
             my_id = "0"
@@ -382,6 +385,10 @@ async def handle_websocket(url, is_network=False):
                 break
             error_context = "authentication" if headers is None else "connection"
             log(f"Error during {error_context} setup for {url}: {exc}. Reconnecting in {RECONNECT_DELAY_SECONDS}s...")
+            retry_count += 1
+            if retry_count >= MAX_RECONNECT_RETRIES:
+                await shutdown_bot(f"Max retries ({MAX_RECONNECT_RETRIES}) reached for {url}. Shutting down bot.")
+                break
         finally:
             if ws is not None:
                 with suppress(Exception):
