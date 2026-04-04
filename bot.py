@@ -23,8 +23,10 @@ MODEL_NAME = "Pomni/owotgpt1.3"
 BOT_NICK_DEFAULT = "OWoTGPT"
 ADMIN_USER = "gimmickCellar"
 CONTEXT_LIMIT = 15
+CONTEXT_TOKEN_LIMIT = 900
 MESSAGE_CHAR_LIMIT = 400
 RECONNECT_DELAY_SECONDS = 5
+BOT_COLOR = 0x0077CC
 TIERS_GIST_ID_ENV = "OWOTGPT_TIERS_GIST_ID"
 GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
 OWOT_TOKEN_ENV = "OWOT_TOKEN"
@@ -45,7 +47,7 @@ permission_manager = PermissionManager()
 command_dispatcher = create_dispatcher(permission_manager)
 
 
-def create_command_context(ws, loc, real_user, my_id, histories, current_temp, perm_manager):
+def create_command_context(ws, loc, real_user, my_id, histories, current_temp, perm_manager, is_registered):
     return CommandContext(
         websocket=ws,
         location=loc,
@@ -56,11 +58,13 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp, p
         histories=histories,
         current_temperature=current_temp,
         context_limit=CONTEXT_LIMIT,
-        permission_manager=perm_manager
+        context_token_limit=CONTEXT_TOKEN_LIMIT,
+        permission_manager=perm_manager,
+        is_registered=is_registered
     )
 
 
-async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT):
+async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT, color=BOT_COLOR):
     if len(message) > MESSAGE_CHAR_LIMIT:
         message = message[:MESSAGE_CHAR_LIMIT - 3] + "..."
     await ws.send(json.dumps({
@@ -68,7 +72,7 @@ async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT):
         "nickname": nickname,
         "message": message,
         "location": loc,
-        "color": 0
+        "color": color
     }))
 
 
@@ -251,10 +255,44 @@ def format_message(msg_data):
     real_user = msg_data.get("realUsername", "")
     text = msg_data.get("message", "")
     is_registered = msg_data.get("registered", False)
-    if is_registered:
+    if is_registered and real_user:
         display_name = nick if nick and nick.lower() != real_user.lower() else real_user
         return f"[*{mid}] {display_name}: {text}"
     return f"[*{mid}] {nick}: {text}" if nick else f"[{mid}]: {text}"
+
+
+def trim_history_by_tokens(history, token_limit):
+    """Trim history to stay within token limit."""
+    if len(history) == 0:
+        return history
+
+    # Calculate total tokens
+    full_text = "\n".join(history)
+    tokens = tokenizer(full_text, return_tensors="pt")
+    total_tokens = len(tokens["input_ids"][0])
+
+    # If within limit, return as-is
+    if total_tokens <= token_limit:
+        return history
+
+    # Binary search to find the maximum number of messages that fit
+    left, right = 1, len(history)
+    best_count = 0
+
+    while left <= right:
+        mid = (left + right) // 2
+        test_text = "\n".join(history[-mid:])
+        test_tokens = tokenizer(test_text, return_tensors="pt")
+        token_count = len(test_tokens["input_ids"][0])
+
+        if token_count <= token_limit:
+            best_count = mid
+            left = mid + 1
+        else:
+            right = mid - 1
+
+    # Return the best number of messages from the end
+    return history[-best_count:] if best_count > 0 else []
 
 
 def do_generate(prompt_str, temp):
@@ -289,7 +327,8 @@ async def handle_command_response(ws, response_msg, loc, my_id):
         gen_temp = float(gen_temp_str)
 
         log(f"[{loc}] Generating...")
-        prompt = "\n".join(histories[loc]) + f"\n[*{my_id}] {gen_nick}: {gen_start}"
+        trimmed_history = trim_history_by_tokens(histories[loc], CONTEXT_TOKEN_LIMIT)
+        prompt = "\n".join(trimmed_history) + f"\n[*{my_id}] {gen_nick}: {gen_start}"
 
         loop = asyncio.get_running_loop()
         output = await loop.run_in_executor(executor, do_generate, prompt, gen_temp)
@@ -304,6 +343,21 @@ async def handle_command_response(ws, response_msg, loc, my_id):
         _, temp_str = response_msg.split(":", 1)
         current_temperature = float(temp_str)
         await send_response(ws, f"🌡️ Global temperature set to {current_temperature}", loc)
+        return
+
+    if response_msg.startswith("SET_COLOR:"):
+        _, color_hex = response_msg.split(":", 1)
+        global BOT_COLOR
+        try:
+            if color_hex.startswith("#"):
+                BOT_COLOR = int(color_hex[1:], 16)
+            elif color_hex.startswith("0x"):
+                BOT_COLOR = int(color_hex, 16)
+            else:
+                BOT_COLOR = int(color_hex, 16)
+            await send_response(ws, f"🎨 Bot color changed to {color_hex}", loc)
+        except ValueError:
+            await send_response(ws, f"❌ Invalid color format. Use hex like #FF0000 or 0xFF0000", loc)
         return
 
     if response_msg.startswith("SYNC_TIERS:"):
@@ -360,8 +414,9 @@ async def handle_websocket(url, is_network=False):
                 loc = "network" if is_network else data.get("location", "page")
                 msg_text = data.get("message", "")
                 real_user = data.get("realUsername", "")
+                is_registered = data.get("registered", False)
 
-                ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, permission_manager)
+                ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, permission_manager, is_registered)
                 response_msg = command_dispatcher.dispatch(msg_text, ctx)
 
                 if response_msg:
