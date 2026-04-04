@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Any
 from difflib import get_close_matches
-from permissions import PermissionManager, UserTier
+from permissions import PermissionManager, UserTier, GroupTier
 
 
 @dataclass
@@ -24,7 +24,9 @@ class CommandContext:
     histories: Dict[str, List[str]]
     current_temperature: float
     context_limit: int
+    context_token_limit: int
     permission_manager: PermissionManager
+    is_registered: bool
 
 
 @dataclass
@@ -107,10 +109,10 @@ class CommandDispatcher:
 
         command, args = result
 
-        if self.permission_manager.is_banned(ctx.real_user):
+        if self.permission_manager.is_banned(ctx.real_user, ctx.is_registered):
             return "🚫 You are banned from using this bot."
 
-        if not self.permission_manager.can_use_command(ctx.real_user, command.required_tier):
+        if not self.permission_manager.can_use_command(ctx.real_user, command.required_tier, ctx.is_registered):
             return f"⛔ This command requires {command.required_tier.value} tier or higher."
 
         try:
@@ -127,7 +129,7 @@ class CommandDispatcher:
                 cmd = self.commands.get(self.alias_map.get(cmd_name_lower, ""))
 
             if cmd:
-                if not self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier):
+                if not self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier, ctx.is_registered):
                     return f"⛔ Command '{command_name}' requires {cmd.required_tier.value} tier or higher."
 
                 lines = [f"📖 Help: {cmd.name}"]
@@ -156,7 +158,7 @@ class CommandDispatcher:
         admin_commands = []
 
         for cmd in self.commands.values():
-            can_use = self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier)
+            can_use = self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier, ctx.is_registered)
             if can_use:
                 entry = f"  • {cmd.name}" + (f" ({', '.join(cmd.aliases)})" if cmd.aliases else "")
                 if cmd.description:
@@ -170,11 +172,11 @@ class CommandDispatcher:
 
         lines.extend(user_commands)
 
-        if mod_commands and self.permission_manager.is_moderator(ctx.real_user):
+        if mod_commands and self.permission_manager.is_moderator(ctx.real_user, ctx.is_registered):
             lines.append("\n🔹 Moderator Commands:")
             lines.extend(mod_commands)
 
-        if admin_commands and self.permission_manager.is_admin(ctx.real_user):
+        if admin_commands and self.permission_manager.is_admin(ctx.real_user, ctx.is_registered):
             lines.append("\n🔒 Admin Commands:")
             lines.extend(admin_commands)
 
@@ -185,9 +187,10 @@ class CommandDispatcher:
         lines.append("   --start [text]      Provide seed text for generation")
         lines.append("   --imitate [nick]    Use custom nickname (gen command)")
         lines.append("   --nick [nick]       Use custom nickname (imitate command)")
-        lines.append("   --value [number]    Set temperature value")
+        lines.append("   --value [number]    Set temperature value or color hex")
         lines.append("   --user [username]   Specify target user")
         lines.append("   --tier [tier]       Set user tier (admin/moderator/user/banned)")
+        lines.append("   --group [group]     Specify group (%ANYONE%, %ANONS%, %REG%)")
 
         return "\n".join(lines)
 
@@ -384,7 +387,7 @@ def handle_listtiers(ctx: CommandContext, args: str) -> str:
 
 def handle_checktier(ctx: CommandContext, args: str) -> str:
     """Handle checktier command - check your current tier."""
-    user_tier = ctx.permission_manager.get_tier(ctx.real_user)
+    user_tier = ctx.permission_manager.get_tier(ctx.real_user, ctx.is_registered)
     lines = [f"👤 Your tier: {user_tier.value}"]
 
     if user_tier == UserTier.BANNED:
@@ -400,6 +403,74 @@ def handle_checktier(ctx: CommandContext, args: str) -> str:
 def handle_kill(ctx: CommandContext, args: str) -> str:
     """Handle kill command - immediately stop the bot."""
     return "KILL_BOT:🛑 Kill command received. Shutting down immediately."
+
+
+def handle_grouptier(ctx: CommandContext, args: str) -> str:
+    """Handle grouptier command - set tier for groups (%ANYONE%, %ANONS%, %REG%)."""
+    cleaned_args, flags = parse_flags(args, valid_flags=["group", "tier"])
+
+    group_name = flags.get("group", cleaned_args.split()[0] if cleaned_args else "")
+    tier_name = flags.get("tier", cleaned_args.split()[1] if len(cleaned_args.split()) > 1 else "")
+
+    if not group_name:
+        lines = ["👥 Current Group Tiers:"]
+        for group in [GroupTier.ANYONE, GroupTier.ANONS, GroupTier.REG]:
+            tier = ctx.permission_manager.get_group_tier(group)
+            status = tier.value if tier else "disabled"
+            lines.append(f"  • %{group.value.upper()}%: {status}")
+        return "\n".join(lines)
+
+    group_name = group_name.upper()
+    if not group_name.startswith("%") or not group_name.endswith("%"):
+        group_name = f"%{group_name}%"
+
+    group_map = {
+        "%ANYONE%": GroupTier.ANYONE,
+        "%ANONS%": GroupTier.ANONS,
+        "%REG%": GroupTier.REG
+    }
+
+    group = group_map.get(group_name.upper())
+    if not group:
+        return f"❌ Invalid group. Valid groups: {', '.join(group_map.keys())}"
+
+    if not tier_name:
+        tier = ctx.permission_manager.get_group_tier(group)
+        status = tier.value if tier else "disabled"
+        return f"👥 Group %{group.value.upper()}% tier: {status}"
+
+    tier_name = tier_name.lower()
+    valid_tiers = [t.value for t in UserTier]
+    if tier_name not in valid_tiers:
+        return f"❌ Invalid tier. Valid tiers: {', '.join(valid_tiers)}"
+
+    try:
+        new_tier = UserTier(tier_name)
+        ctx.permission_manager.set_group_tier(group, new_tier)
+        return f"SYNC_TIERS:✅ Set %{group.value.upper()}% tier to {new_tier.value}"
+    except ValueError:
+        return f"❌ Invalid tier: {tier_name}"
+
+
+def handle_color(ctx: CommandContext, args: str) -> str:
+    """Handle color command - change bot color (admin only)."""
+    cleaned_args, flags = parse_flags(args, valid_flags=["value"])
+    color_hex = flags.get("value", cleaned_args.strip() if cleaned_args else "")
+
+    if not color_hex:
+        return f"❌ Usage: color --value <hex> or color <hex>\nExample: color #FF0000 or color 0xFF0000"
+
+    # Validate hex format
+    color_hex = color_hex.strip()
+    if color_hex.startswith("#"):
+        color_hex = color_hex[1:]
+    elif color_hex.startswith("0x"):
+        color_hex = color_hex[2:]
+
+    if not all(c in "0123456789ABCDEFabcdef" for c in color_hex):
+        return "❌ Invalid hex color. Use format #RRGGBB or 0xRRGGBB"
+
+    return f"SET_COLOR:#{color_hex.upper()}"
 
 
 def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatcher:
@@ -522,6 +593,26 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         description="Legacy trigger for text generation (moderator only)",
         usage="my son [--temp <value>] [--start <text>]",
         help_text="Moderator-only legacy command. Functions like 'gen' but only moderators+ can use it."
+    ))
+
+    dispatcher.register(Command(
+        name="owotgpt grouptier",
+        handler=handle_grouptier,
+        aliases=["grouptier", "owotgpt setgrouptier", "setgrouptier"],
+        required_tier=UserTier.ADMIN,
+        description="Set or check group tiers for %ANYONE%, %ANONS%, %REG%",
+        usage="grouptier [--group <group>] [--tier <tier>]",
+        help_text="Without arguments: shows all group tiers. With --group: shows that group's tier. With --group and --tier: sets the group's tier. Groups affect users without explicit tier assignments."
+    ))
+
+    dispatcher.register(Command(
+        name="owotgpt color",
+        handler=handle_color,
+        aliases=["color", "owotgpt setcolor", "setcolor"],
+        required_tier=UserTier.ADMIN,
+        description="Change the bot's chat color",
+        usage="color --value <hex> or color <hex>",
+        help_text="Changes the bot's message color. Use hex format like #FF0000 (red) or 0x00FF00 (green)."
     ))
 
     return dispatcher
