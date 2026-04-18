@@ -61,6 +61,11 @@ COMMANDS
 👑 ADMIN COMMANDS
 ─────────────────
 
+🎨 owotgpt color <hex> or color --value <hex>
+   Aliases: color, owotgpt setcolor, setcolor
+   Sets the bot's chat color.
+   Example: color #FF0000 (red) or color 0xFF0000 (green)
+
 ⚙️  owotgpt tier [--user <username>] [--tier <tier>]
    Aliases: tier, settier, owotgpt settier, set tier
    Check or set user permission tiers.

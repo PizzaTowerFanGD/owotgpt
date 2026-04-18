@@ -20,13 +20,17 @@ BOT_DOMAIN = os.getenv("OWOT_DOMAIN", "ourworldoftext.com")
 NETWORK_DOMAIN = os.getenv("OWOT_NETWORK_DOMAIN", BOT_DOMAIN)
 NETWORK_WORLD_NAME = "...network"
 MODEL_NAME = "Pomni/owotgpt1.3"
-BOT_NICK_DEFAULT = "OWoTGPT"
+BOT_NICK_DEFAULT = os.getenv("OWOT_BOT_NICK", "OWoTGPT")
 ADMIN_USER = "gimmickCellar"
 CONTEXT_LIMIT = 15
 CONTEXT_TOKEN_LIMIT = 900
 MESSAGE_CHAR_LIMIT = 400
 RECONNECT_DELAY_SECONDS = 5
-BOT_COLOR = 0x0077CC
+_bot_color_env = os.getenv("OWOT_BOT_COLOR", "0x0077CC")
+if _bot_color_env.startswith("#"):
+    BOT_COLOR = int(_bot_color_env[1:], 16)
+else:
+    BOT_COLOR = int(_bot_color_env, 16)
 TIERS_GIST_ID_ENV = "OWOTGPT_TIERS_GIST_ID"
 GITHUB_TOKEN_ENV = "GITHUB_TOKEN"
 OWOT_TOKEN_ENV = "OWOT_TOKEN"
@@ -35,7 +39,7 @@ BOT_LOGIN_NAME = "owotgpt."
 UVIAS_LOGIN_URL = "https://uvias.com/api/auth/uvias"
 OWOT_TOKEN_CHECK_URL = "https://ourworldoftext.com/accounts/member_autocomplete/"
 
-current_temperature = 1.3
+current_temperature = float(os.getenv("OWOT_BOT_TEMP", "1.3"))
 shutdown_event = None
 
 
@@ -47,7 +51,7 @@ permission_manager = PermissionManager()
 command_dispatcher = create_dispatcher(permission_manager)
 
 
-def create_command_context(ws, loc, real_user, my_id, histories, current_temp, perm_manager, is_registered):
+def create_command_context(ws, loc, real_user, my_id, histories, current_temp, bot_color, perm_manager, is_registered):
     return CommandContext(
         websocket=ws,
         location=loc,
@@ -57,6 +61,7 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp, p
         bot_nick_default=BOT_NICK_DEFAULT,
         histories=histories,
         current_temperature=current_temp,
+        bot_color=bot_color,
         context_limit=CONTEXT_LIMIT,
         context_token_limit=CONTEXT_TOKEN_LIMIT,
         permission_manager=perm_manager,
@@ -64,7 +69,11 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp, p
     )
 
 
-async def send_response(ws, message, loc, nickname=BOT_NICK_DEFAULT, color=BOT_COLOR):
+async def send_response(ws, message, loc, nickname=None, color=None):
+    if nickname is None:
+        nickname = BOT_NICK_DEFAULT
+    if color is None:
+        color = BOT_COLOR
     if len(message) > MESSAGE_CHAR_LIMIT:
         message = message[:MESSAGE_CHAR_LIMIT - 3] + "..."
     await ws.send(json.dumps({
@@ -416,7 +425,7 @@ async def handle_websocket(url, is_network=False):
                 real_user = data.get("realUsername", "")
                 is_registered = data.get("registered", False)
 
-                ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, permission_manager, is_registered)
+                ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, BOT_COLOR, permission_manager, is_registered)
                 response_msg = command_dispatcher.dispatch(msg_text, ctx)
 
                 if response_msg:

@@ -23,6 +23,7 @@ class CommandContext:
     bot_nick_default: str
     histories: Dict[str, List[str]]
     current_temperature: float
+    bot_color: int
     context_limit: int
     context_token_limit: int
     permission_manager: PermissionManager
@@ -254,6 +255,7 @@ def handle_info(ctx: CommandContext, args: str) -> str:
     ctx_count = len(ctx.histories.get(loc, []))
     return (f"🤖 Bot Info [{loc}]\n"
             f"Temperature: {ctx.current_temperature}\n"
+            f"Color: #{ctx.bot_color:06X}\n"
             f"Context: {ctx_count}/{ctx.context_limit} messages")
 
 
