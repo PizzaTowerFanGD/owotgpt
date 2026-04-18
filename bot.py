@@ -74,6 +74,8 @@ async def send_response(ws, message, loc, nickname=None, color=None):
         nickname = BOT_NICK_DEFAULT
     if color is None:
         color = BOT_COLOR
+    if isinstance(color, int):
+        color = f"#{color:06X}"
     if len(message) > MESSAGE_CHAR_LIMIT:
         message = message[:MESSAGE_CHAR_LIMIT - 3] + "..."
     await ws.send(json.dumps({
