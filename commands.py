@@ -148,6 +148,11 @@ class CommandDispatcher:
         except Exception as e:
             return f"❌ Error executing command: {str(e)}"
 
+    def _shortest_alias(self, cmd: Command) -> str:
+        """Return the shortest name/alias for a command."""
+        all_names = cmd.all_names
+        return min(all_names, key=len)
+
     def get_help(self, ctx: CommandContext, command_name: str = "") -> str:
         """Generate help text for all commands or a specific command."""
         if command_name:
@@ -180,47 +185,12 @@ class CommandDispatcher:
                 return f"❓ Unknown command '{command_name}'. Did you mean: {', '.join(suggestions)}?"
             return f"❓ Unknown command '{command_name}'. Type 'help' for available commands."
 
-        lines = ["📚 Available Commands:"]
-        user_commands = []
-        mod_commands = []
-        admin_commands = []
-
+        names = []
         for cmd in self.commands.values():
-            can_use = self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier, ctx.is_registered)
-            if can_use:
-                entry = f"  • {cmd.name}" + (f" ({', '.join(cmd.aliases)})" if cmd.aliases else "")
-                if cmd.description:
-                    entry += f" - {cmd.description}"
-                if cmd.required_tier == UserTier.ADMIN:
-                    admin_commands.append(entry)
-                elif cmd.required_tier == UserTier.MODERATOR:
-                    mod_commands.append(entry)
-                else:
-                    user_commands.append(entry)
+            if self.permission_manager.can_use_command(ctx.real_user, cmd.required_tier, ctx.is_registered):
+                names.append(self._shortest_alias(cmd))
 
-        lines.extend(user_commands)
-
-        if mod_commands and self.permission_manager.is_moderator(ctx.real_user, ctx.is_registered):
-            lines.append("\n🔹 Moderator Commands:")
-            lines.extend(mod_commands)
-
-        if admin_commands and self.permission_manager.is_admin(ctx.real_user, ctx.is_registered):
-            lines.append("\n🔒 Admin Commands:")
-            lines.extend(admin_commands)
-
-        lines.append("\n💡 Use 'help <command>' for detailed usage.")
-        lines.append("📖 Full documentation: https://termbin.com/zsyo")
-        lines.append("\n🚩 Available flags:")
-        lines.append("   --temp [0.1-2.0]    Set generation temperature")
-        lines.append("   --start [text]      Provide seed text for generation")
-        lines.append("   --imitate [nick]    Use custom nickname (gen command)")
-        lines.append("   --nick [nick]       Use custom nickname (imitate command)")
-        lines.append("   --value [number]    Set temperature value or color hex")
-        lines.append("   --user [username]   Specify target user")
-        lines.append("   --tier [tier]       Set user tier (admin/moderator/user/banned)")
-        lines.append("   --group [group]     Specify group (%ANYONE%, %ANONS%, %REG%)")
-
-        return "\n".join(lines)
+        return " ".join(names)
 
     def suggest_command(self, text: str) -> Optional[str]:
         """Suggest a command if the input is close to a valid one."""

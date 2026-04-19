@@ -69,7 +69,7 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp, b
     )
 
 
-async def send_response(ws, message, loc, nickname=None, color=None):
+async def send_response(ws, message, loc, nickname=None, color=None, is_admin=False):
     if nickname is None:
         nickname = BOT_NICK_DEFAULT
     if color is None:
@@ -78,7 +78,7 @@ async def send_response(ws, message, loc, nickname=None, color=None):
         color = f"#{color:06X}"
     if len(message) > MESSAGE_CHAR_LIMIT:
         message = message[:MESSAGE_CHAR_LIMIT - 3] + "..."
-    if message.startswith("/"):
+    if message.startswith("/block") and not is_admin:
         message = "\u200B" + message
     await ws.send(json.dumps({
         "kind": "chat",
@@ -331,7 +331,7 @@ async def shutdown_bot(reason: str):
     shutdown_event.set()
 
 
-async def handle_command_response(ws, response_msg, loc, my_id):
+async def handle_command_response(ws, response_msg, loc, my_id, is_admin=False):
     global current_temperature
 
     if response_msg.startswith("GEN_TRIGGER:"):
@@ -348,14 +348,14 @@ async def handle_command_response(ws, response_msg, loc, my_id):
         gen_response = (gen_start + " " + output.strip()).strip()
 
         if gen_response:
-            await send_response(ws, gen_response, loc, gen_nick)
+            await send_response(ws, gen_response, loc, gen_nick, is_admin=is_admin)
             histories[loc].append(f"[*{my_id}] {gen_nick}: {gen_response}")
         return
 
     if response_msg.startswith("SET_TEMP:"):
         _, temp_str = response_msg.split(":", 1)
         current_temperature = float(temp_str)
-        await send_response(ws, f"🌡️ Global temperature set to {current_temperature}", loc)
+        await send_response(ws, f"🌡️ Global temperature set to {current_temperature}", loc, is_admin=is_admin)
         return
 
     if response_msg.startswith("SET_COLOR:"):
@@ -368,26 +368,26 @@ async def handle_command_response(ws, response_msg, loc, my_id):
                 BOT_COLOR = int(color_hex, 16)
             else:
                 BOT_COLOR = int(color_hex, 16)
-            await send_response(ws, f"🎨 Bot color changed to {color_hex}", loc)
+            await send_response(ws, f"🎨 Bot color changed to {color_hex}", loc, is_admin=is_admin)
         except ValueError:
-            await send_response(ws, f"❌ Invalid color format. Use hex like #FF0000 or 0xFF0000", loc)
+            await send_response(ws, f"❌ Invalid color format. Use hex like #FF0000 or 0xFF0000", loc, is_admin=is_admin)
         return
 
     if response_msg.startswith("SYNC_TIERS:"):
         _, user_message = response_msg.split(":", 1)
         synced = save_tiers_to_github()
         suffix = " (synced to GitHub)" if synced else ""
-        await send_response(ws, f"{user_message}{suffix}", loc)
+        await send_response(ws, f"{user_message}{suffix}", loc, is_admin=is_admin)
         return
 
     if response_msg.startswith("KILL_BOT:"):
         _, user_message = response_msg.split(":", 1)
         with suppress(Exception):
-            await send_response(ws, user_message, loc)
+            await send_response(ws, user_message, loc, is_admin=is_admin)
         await shutdown_bot("Kill command triggered. Exiting bot.")
         return
 
-    await send_response(ws, response_msg, loc)
+    await send_response(ws, response_msg, loc, is_admin=is_admin)
 
 
 async def handle_websocket(url, is_network=False):
@@ -433,7 +433,8 @@ async def handle_websocket(url, is_network=False):
                 response_msg = command_dispatcher.dispatch(msg_text, ctx)
 
                 if response_msg:
-                    await handle_command_response(ws, response_msg, loc, my_id)
+                    sender_is_admin = permission_manager.is_admin(real_user, is_registered)
+                    await handle_command_response(ws, response_msg, loc, my_id, is_admin=sender_is_admin)
                     continue
 
                 formatted = format_message(data)
