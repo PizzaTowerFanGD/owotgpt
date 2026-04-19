@@ -69,7 +69,7 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp, b
     )
 
 
-async def send_response(ws, message, loc, nickname=None, color=None):
+async def send_response(ws, message, loc, nickname=None, color=None, bypass_system=False):
     if nickname is None:
         nickname = BOT_NICK_DEFAULT
     if color is None:
@@ -78,7 +78,7 @@ async def send_response(ws, message, loc, nickname=None, color=None):
         color = f"#{color:06X}"
     if len(message) > MESSAGE_CHAR_LIMIT:
         message = message[:MESSAGE_CHAR_LIMIT - 3] + "..."
-    if message.startswith("/"):
+    if message.startswith("/") and not bypass_system:
         message = "\u200B" + message
     await ws.send(json.dumps({
         "kind": "chat",
@@ -385,6 +385,12 @@ async def handle_command_response(ws, response_msg, loc, my_id):
         with suppress(Exception):
             await send_response(ws, user_message, loc)
         await shutdown_bot("Kill command triggered. Exiting bot.")
+        return
+
+    if response_msg.startswith("TELL_TARGET:"):
+        _, params = response_msg.split(":", 1)
+        target_id, tell_message = params.split("|", 1)
+        await send_response(ws, f"[@{target_id}] {tell_message}", loc, bypass_system=True)
         return
 
     await send_response(ws, response_msg, loc)
