@@ -78,6 +78,8 @@ async def send_response(ws, message, loc, nickname=None, color=None):
         color = f"#{color:06X}"
     if len(message) > MESSAGE_CHAR_LIMIT:
         message = message[:MESSAGE_CHAR_LIMIT - 3] + "..."
+    if message.startswith("/"):
+        message = "\u200B" + message
     await ws.send(json.dumps({
         "kind": "chat",
         "nickname": nickname,
