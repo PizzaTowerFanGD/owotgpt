@@ -6,10 +6,14 @@ error handling, and permission management.
 """
 
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Any
 from difflib import get_close_matches
 from permissions import PermissionManager, UserTier, GroupTier
+
+RATE_LIMIT_COMMANDS = 2
+RATE_LIMIT_WINDOW = 10
 
 
 @dataclass
@@ -74,6 +78,7 @@ class CommandDispatcher:
         self.commands: Dict[str, Command] = {}
         self.alias_map: Dict[str, str] = {}
         self.permission_manager = permission_manager
+        self._rate_limits: Dict[str, List[float]] = {}
 
     def register(self, command: Command) -> None:
         """Register a command and its aliases."""
@@ -99,6 +104,25 @@ class CommandDispatcher:
 
         return None
 
+    def _is_rate_limited(self, ctx: CommandContext) -> bool:
+        """Check if a user is rate limited. Returns True if limited."""
+        if ctx.is_registered and ctx.real_user:
+            key = ctx.real_user
+        else:
+            key = "__anon__"
+
+        now = time.monotonic()
+        timestamps = self._rate_limits.get(key, [])
+        timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+
+        if len(timestamps) >= RATE_LIMIT_COMMANDS:
+            self._rate_limits[key] = timestamps
+            return True
+
+        timestamps.append(now)
+        self._rate_limits[key] = timestamps
+        return False
+
     def dispatch(self, text: str, ctx: CommandContext) -> Optional[str]:
         """
         Dispatch a command to its handler.
@@ -106,6 +130,9 @@ class CommandDispatcher:
         """
         result = self.parse_command(text)
         if not result:
+            return None
+
+        if self._is_rate_limited(ctx):
             return None
 
         command, args = result
