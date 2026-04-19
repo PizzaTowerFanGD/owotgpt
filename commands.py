@@ -246,16 +246,6 @@ def handle_help(ctx: CommandContext, args: str) -> str:
     return dispatcher.get_help(ctx, args.strip())
 
 
-def handle_tell(ctx: CommandContext, args: str) -> str:
-    """Handle tell command - send a message to a specific user by ID, bypassing system message filters."""
-    parts = args.strip().split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip():
-        return "❌ Usage: /tell <ID> <message>"
-    target_id = parts[0]
-    message = parts[1].strip()
-    return f"TELL_TARGET:{target_id}|{message}"
-
-
 def handle_info(ctx: CommandContext, args: str) -> str:
     """Handle info command - shows bot status."""
     loc = ctx.location
@@ -622,16 +612,6 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         description="Change the bot's chat color",
         usage="color --value <hex> or color <hex>",
         help_text="Changes the bot's message color. Use hex format like #FF0000 (red) or 0x00FF00 (green)."
-    ))
-
-    dispatcher.register(Command(
-        name="/tell",
-        handler=handle_tell,
-        aliases=["tell"],
-        required_tier=UserTier.USER,
-        description="Send a message to a specific user by ID, bypassing system message filters",
-        usage="/tell <ID> <message>",
-        help_text="Sends a message directed at a user by their connection ID. Bypasses system message filtering."
     ))
 
     return dispatcher
