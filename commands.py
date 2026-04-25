@@ -472,6 +472,27 @@ def handle_color(ctx: CommandContext, args: str) -> str:
     return f"SET_COLOR:#{color_hex.upper()}"
 
 
+def handle_channel(ctx: CommandContext, args: str) -> str:
+    """Handle channel command - add or remove chat channels."""
+    parts = args.split()
+    if not parts:
+        return "❌ Usage: channel add <url|/world> or channel remove <url|name>"
+
+    action = parts[0].lower()
+    if action == "add":
+        if len(parts) < 2:
+            return "❌ Usage: channel add <url|/world>"
+        target = parts[1]
+        return f"CHANNEL_ADD:{target}"
+    elif action == "remove":
+        if len(parts) < 2:
+            return "❌ Usage: channel remove <url|name>"
+        target = parts[1]
+        return f"CHANNEL_REMOVE:{target}"
+    else:
+        return f"❌ Unknown action: {action}. Use 'add' or 'remove'."
+
+
 def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatcher:
     """Create and configure the command dispatcher with all commands."""
     dispatcher = CommandDispatcher(permission_manager)
@@ -612,6 +633,16 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         description="Change the bot's chat color",
         usage="color --value <hex> or color <hex>",
         help_text="Changes the bot's message color. Use hex format like #FF0000 (red) or 0x00FF00 (green)."
+    ))
+
+    dispatcher.register(Command(
+        name="owotgpt channel",
+        handler=handle_channel,
+        aliases=["channel", "owotgpt chan", "chan"],
+        required_tier=UserTier.MODERATOR,
+        description="Add or remove chat channels",
+        usage="channel <add|remove> <url|name>",
+        help_text="Adds a new websocket connection or removes an existing one. 'channel add /world' adds an OWoT world, 'channel remove global' disables the global chat location."
     ))
 
     return dispatcher

@@ -41,6 +41,8 @@ OWOT_TOKEN_CHECK_URL = "https://ourworldoftext.com/accounts/member_autocomplete/
 
 current_temperature = float(os.getenv("OWOT_BOT_TEMP", "1.3"))
 shutdown_event = None
+active_tasks = {}
+disabled_locations = set()
 
 
 def log(msg):
@@ -387,10 +389,63 @@ async def handle_command_response(ws, response_msg, loc, my_id, is_admin=False):
         await shutdown_bot("Kill command triggered. Exiting bot.")
         return
 
+    if response_msg.startswith("CHANNEL_ADD:"):
+        _, target = response_msg.split(":", 1)
+        if target.lower() == "global":
+            if "global" in disabled_locations:
+                disabled_locations.remove("global")
+                await send_response(ws, "✅ Global chat re-enabled.", loc, is_admin=is_admin)
+            else:
+                await send_response(ws, "❓ Global chat is already enabled.", loc, is_admin=is_admin)
+            return
+
+        url = target
+        name = target
+        is_net = False
+        if target.startswith("/"):
+            url = build_ws_url(BOT_DOMAIN, target)
+            name = target
+        elif target.startswith("ws://") or target.startswith("wss://"):
+            url = target
+            name = target
+        else:
+            # Assume it's a world name
+            url = build_ws_url(BOT_DOMAIN, target)
+            name = "/" + target if not target.startswith("/") else target
+
+        if name in active_tasks:
+            await send_response(ws, f"❓ Channel {name} is already active.", loc, is_admin=is_admin)
+            return
+
+        active_tasks[name] = asyncio.create_task(handle_websocket(url, name, is_network=is_net))
+        await send_response(ws, f"✅ Added channel: {name}", loc, is_admin=is_admin)
+        return
+
+    if response_msg.startswith("CHANNEL_REMOVE:"):
+        _, target = response_msg.split(":", 1)
+        if target.lower() == "global":
+            disabled_locations.add("global")
+            await send_response(ws, "✅ Global chat disabled.", loc, is_admin=is_admin)
+            return
+
+        # Try to find task by name
+        name = target
+        if name not in active_tasks and not name.startswith("/") and not name.startswith("ws"):
+            name = "/" + target
+
+        if name in active_tasks:
+            task = active_tasks.pop(name)
+            task.cancel()
+            await send_response(ws, f"✅ Removed channel: {name}", loc, is_admin=is_admin)
+            return
+
+        await send_response(ws, f"❓ Channel {target} not found.", loc, is_admin=is_admin)
+        return
+
     await send_response(ws, response_msg, loc, is_admin=is_admin)
 
 
-async def handle_websocket(url, is_network=False):
+async def handle_websocket(url, name, is_network=False):
     global histories
 
     while not shutdown_event.is_set():
@@ -398,7 +453,7 @@ async def handle_websocket(url, is_network=False):
         headers = None
         try:
             headers = build_headers()
-            log(f"Connecting to {url}...")
+            log(f"Connecting to {url} (name: {name})...")
             ws = await websockets.connect(url, additional_headers=headers or None)
             my_id = "0"
 
@@ -421,13 +476,25 @@ async def handle_websocket(url, is_network=False):
                 if str(sender_id) == str(my_id):
                     continue
 
-                if is_network and data.get("location") == "global":
+                loc = data.get("location", "page")
+                if is_network:
+                    loc = "network"
+                elif loc == "page" and name:
+                    # Map 'page' to the world name for unique history keys
+                    loc = name.strip("/") or "page"
+                
+                if loc in disabled_locations:
                     continue
 
-                loc = "network" if is_network else data.get("location", "page")
+                if is_network and loc == "global":
+                    continue
+
                 msg_text = data.get("message", "")
                 real_user = data.get("realUsername", "")
                 is_registered = data.get("registered", False)
+
+                if loc not in histories:
+                    histories[loc] = []
 
                 ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, BOT_COLOR, permission_manager, is_registered)
                 response_msg = command_dispatcher.dispatch(msg_text, ctx)
@@ -468,17 +535,17 @@ async def main():
     world_url = build_ws_url(BOT_DOMAIN, WORLD_NAME)
     network_url = build_ws_url(NETWORK_DOMAIN, NETWORK_WORLD_NAME)
 
-    tasks = [
-        asyncio.create_task(handle_websocket(world_url, is_network=False)),
-        asyncio.create_task(handle_websocket(network_url, is_network=True))
-    ]
+    # Initial tasks
+    world_name = WORLD_NAME if WORLD_NAME.startswith("/") else "/" + WORLD_NAME
+    active_tasks[world_name] = asyncio.create_task(handle_websocket(world_url, world_name, is_network=False))
+    active_tasks["network"] = asyncio.create_task(handle_websocket(network_url, "network", is_network=True))
 
     try:
         await shutdown_event.wait()
     finally:
-        for task in tasks:
+        for task in active_tasks.values():
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*active_tasks.values(), return_exceptions=True)
         executor.shutdown(wait=False, cancel_futures=True)
 
 
