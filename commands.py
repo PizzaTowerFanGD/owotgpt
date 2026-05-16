@@ -15,6 +15,9 @@ from permissions import PermissionManager, UserTier, GroupTier
 RATE_LIMIT_COMMANDS = 2
 RATE_LIMIT_WINDOW = 10
 
+# Global state for pending confirmations
+_pending_stops = set()
+
 
 @dataclass
 class CommandContext:
@@ -400,8 +403,29 @@ def handle_checktier(ctx: CommandContext, args: str) -> str:
 
 
 def handle_kill(ctx: CommandContext, args: str) -> str:
-    """Handle kill command - immediately stop the bot."""
-    return "KILL_BOT:🛑 Kill command received. Shutting down immediately."
+    """Handle kill command - immediately stop the bot with confirmation."""
+    user_id = ctx.real_user if ctx.is_registered else f"anon_{ctx.real_user}"
+    
+    if "--yes" in args.lower():
+        if user_id in _pending_stops:
+            _pending_stops.remove(user_id)
+            return "KILL_BOT:🛑 Kill command received. Shutting down immediately."
+        else:
+            return "❌ You must run 'stop' first before 'stop --yes'."
+    else:
+        _pending_stops.add(user_id)
+        return "⚠️ Are you sure you want to stop the bot? Run 'stop --yes' to confirm."
+
+
+def handle_model(ctx: CommandContext, args: str) -> str:
+    """Handle model command - switch to a different Hugging Face model."""
+    cleaned_args, flags = parse_flags(args, valid_flags=["name"])
+    model_name = flags.get("name", cleaned_args.strip() if cleaned_args else None)
+
+    if not model_name:
+        return "🤖 Usage: model <huggingface_model_name> or model --name <model_name>"
+
+    return f"SET_MODEL:{model_name}"
 
 
 def handle_grouptier(ctx: CommandContext, args: str) -> str:
@@ -600,9 +624,19 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         handler=handle_kill,
         aliases=["kill", "owotgpt stop", "stop"],
         required_tier=UserTier.ADMIN,
-        description="Immediately stop the bot",
-        usage="kill",
-        help_text="Stops all websocket handling and exits the process right away."
+        description="Immediately stop the bot (requires confirmation)",
+        usage="stop then stop --yes",
+        help_text="Stops all websocket handling and exits the process. Requires 'stop --yes' after the initial 'stop' command."
+    ))
+
+    dispatcher.register(Command(
+        name="owotgpt model",
+        handler=handle_model,
+        aliases=["model", "setmodel", "owotgpt setmodel"],
+        required_tier=UserTier.ADMIN,
+        description="Switch the GPT-2 model",
+        usage="model <huggingface_model_name>",
+        help_text="Downloads and switches to a different Hugging Face model. This may take some time."
     ))
 
     dispatcher.register(Command(
