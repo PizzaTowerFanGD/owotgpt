@@ -525,10 +525,10 @@ def handle_template(ctx: CommandContext, args: str) -> str:
     template_name = flags.get("name", cleaned_args.strip().lower() if cleaned_args else None)
 
     if not template_name:
-        return f"📝 Current template: {ctx.chat_template}\nAvailable templates: owot, role\nUsage: template <name>"
+        return f"📝 Current template: {ctx.chat_template}\nAvailable templates: owot, role, instruct, chatml\nUsage: template <name>"
 
-    if template_name not in ["owot", "role"]:
-        return "❌ Invalid template. Available: owot, role"
+    if template_name not in ["owot", "role", "instruct", "chatml"]:
+        return "❌ Invalid template. Available: owot, role, instruct, chatml"
 
     return f"SET_TEMPLATE:{template_name}"
 
@@ -701,8 +701,8 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         aliases=["template", "format", "owotgpt format"],
         required_tier=UserTier.MODERATOR,
         description="Switch the chat context format",
-        usage="template <owot|role>",
-        help_text="Changes how messages are formatted in the model's context. 'owot' uses the standard '[*id] nick: message' format. 'role' uses 'role: assistant' or 'role: (nick)'."
+        usage="template <owot|role|instruct|chatml>",
+        help_text="Changes how messages are formatted in the model's context. 'owot' is standard, 'role' is role-based, 'instruct' uses User/Assistant, and 'chatml' uses ChatML tags."
     ))
 
     return dispatcher

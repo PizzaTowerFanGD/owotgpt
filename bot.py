@@ -282,6 +282,14 @@ def format_message(msg_data, template="owot", my_id=None):
         role = "assistant" if mid == str(my_id) else f"({display_name})"
         return f"role: {role}: {text}"
 
+    if template == "instruct":
+        role = "Assistant" if mid == str(my_id) else f"User ({display_name})"
+        return f"{role}: {text}"
+
+    if template == "chatml":
+        role = "assistant" if mid == str(my_id) else f"user name={display_name}"
+        return f"<|im_start|>{role}\n{text}<|im_end|>"
+
     # Default to 'owot' format
     if is_registered and real_user:
         return f"[*{mid}] {display_name}: {text}"
