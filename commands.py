@@ -35,6 +35,7 @@ class CommandContext:
     context_token_limit: int
     permission_manager: PermissionManager
     is_registered: bool
+    chat_template: str
 
 
 @dataclass
@@ -255,6 +256,7 @@ def handle_info(ctx: CommandContext, args: str) -> str:
     ctx_count = len(ctx.histories.get(loc, []))
     return (f"🤖 Bot Info [{loc}]\n"
             f"Temperature: {ctx.current_temperature}\n"
+            f"Template: {ctx.chat_template}\n"
             f"Color: #{ctx.bot_color:06X}\n"
             f"Context: {ctx_count}/{ctx.context_limit} messages")
 
@@ -517,6 +519,20 @@ def handle_channel(ctx: CommandContext, args: str) -> str:
         return f"❌ Unknown action: {action}. Use 'add' or 'remove'."
 
 
+def handle_template(ctx: CommandContext, args: str) -> str:
+    """Handle template command - switch between chat log context formats."""
+    cleaned_args, flags = parse_flags(args, valid_flags=["name"])
+    template_name = flags.get("name", cleaned_args.strip().lower() if cleaned_args else None)
+
+    if not template_name:
+        return f"📝 Current template: {ctx.chat_template}\nAvailable templates: owot, role, instruct, chatml\nUsage: template <name>"
+
+    if template_name not in ["owot", "role", "instruct", "chatml"]:
+        return "❌ Invalid template. Available: owot, role, instruct, chatml"
+
+    return f"SET_TEMPLATE:{template_name}"
+
+
 def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatcher:
     """Create and configure the command dispatcher with all commands."""
     dispatcher = CommandDispatcher(permission_manager)
@@ -677,6 +693,16 @@ def create_dispatcher(permission_manager: PermissionManager) -> CommandDispatche
         description="Add or remove chat channels",
         usage="channel <add|remove> <url|name>",
         help_text="Adds a new websocket connection or removes an existing one. 'channel add /world' adds an OWoT world, 'channel remove global' disables the global chat location."
+    ))
+
+    dispatcher.register(Command(
+        name="owotgpt template",
+        handler=handle_template,
+        aliases=["template", "format", "owotgpt format"],
+        required_tier=UserTier.MODERATOR,
+        description="Switch the chat context format",
+        usage="template <owot|role|instruct|chatml>",
+        help_text="Changes how messages are formatted in the model's context. 'owot' is standard, 'role' is role-based, 'instruct' uses User/Assistant, and 'chatml' uses ChatML tags."
     ))
 
     return dispatcher
