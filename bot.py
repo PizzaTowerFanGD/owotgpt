@@ -326,6 +326,25 @@ def do_generate(prompt_str, temp):
     return result
 
 
+def do_load_model(new_model_name):
+    global model, tokenizer, MODEL_NAME
+    try:
+        log(f"Loading new model: {new_model_name}...")
+        new_tokenizer = AutoTokenizer.from_pretrained(new_model_name)
+        new_model = AutoModelForCausalLM.from_pretrained(new_model_name, use_safetensors=True)
+        new_model.to(device)
+        
+        # Successfully loaded, now replace old model
+        tokenizer = new_tokenizer
+        model = new_model
+        MODEL_NAME = new_model_name
+        log(f"Successfully switched to model: {new_model_name}")
+        return True, f"✅ Successfully switched to model: {new_model_name}"
+    except Exception as e:
+        log(f"Failed to load model {new_model_name}: {e}")
+        return False, f"❌ Failed to load model {new_model_name}: {str(e)}"
+
+
 async def shutdown_bot(reason: str):
     if shutdown_event is None or shutdown_event.is_set():
         return
@@ -387,6 +406,15 @@ async def handle_command_response(ws, response_msg, loc, my_id, is_admin=False):
         with suppress(Exception):
             await send_response(ws, user_message, loc, is_admin=is_admin)
         await shutdown_bot("Kill command triggered. Exiting bot.")
+        return
+
+    if response_msg.startswith("SET_MODEL:"):
+        _, new_model_name = response_msg.split(":", 1)
+        await send_response(ws, f"🔄 Switching model to {new_model_name}... (this may take a minute)", loc, is_admin=is_admin)
+        
+        loop = asyncio.get_running_loop()
+        success, message = await loop.run_in_executor(executor, do_load_model, new_model_name)
+        await send_response(ws, message, loc, is_admin=is_admin)
         return
 
     if response_msg.startswith("CHANNEL_ADD:"):

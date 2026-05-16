@@ -83,7 +83,11 @@ COMMANDS
 
 🛑 owotgpt kill
    Aliases: kill, owotgpt stop, stop
-   Immediately stops the bot process and ends the run.
+   Stops the bot process. Requires 'stop --yes' to confirm.
+
+🤖 owotgpt model <model_name>
+   Aliases: model, setmodel, owotgpt setmodel
+   Switch to a different Hugging Face model.
 
 AVAILABLE FLAGS
 ───────────────
@@ -119,7 +123,13 @@ owotgpt temp --value 1.5
 owotgpt tier --user SomeUser --tier moderator
 → Promote SomeUser to moderator and sync the change
 
-owotgpt kill
-→ Stop the bot immediately
+owotgpt stop
+→ Request bot shutdown (asks for confirmation)
+
+owotgpt stop --yes
+→ Confirm and stop the bot
+
+owotgpt model GPT2
+→ Switch model to GPT2
 
 ═══════════════════════════════════════════════════════════════════
