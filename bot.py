@@ -40,6 +40,7 @@ UVIAS_LOGIN_URL = "https://uvias.com/api/auth/uvias"
 OWOT_TOKEN_CHECK_URL = "https://ourworldoftext.com/accounts/member_autocomplete/"
 
 current_temperature = float(os.getenv("OWOT_BOT_TEMP", "1.3"))
+chat_template = os.getenv("OWOT_BOT_TEMPLATE", "owot").lower()
 shutdown_event = None
 active_tasks = {}
 disabled_locations = set()
@@ -53,7 +54,7 @@ permission_manager = PermissionManager()
 command_dispatcher = create_dispatcher(permission_manager)
 
 
-def create_command_context(ws, loc, real_user, my_id, histories, current_temp, bot_color, perm_manager, is_registered):
+def create_command_context(ws, loc, real_user, my_id, histories, current_temp, bot_color, perm_manager, is_registered, template):
     return CommandContext(
         websocket=ws,
         location=loc,
@@ -67,7 +68,8 @@ def create_command_context(ws, loc, real_user, my_id, histories, current_temp, b
         context_limit=CONTEXT_LIMIT,
         context_token_limit=CONTEXT_TOKEN_LIMIT,
         permission_manager=perm_manager,
-        is_registered=is_registered
+        is_registered=is_registered,
+        chat_template=template
     )
 
 
@@ -264,31 +266,44 @@ histories = {
 }
 
 
-def format_message(msg_data):
-    mid = msg_data.get("id", "0")
+def format_message(msg_data, template="owot", my_id=None):
+    mid = str(msg_data.get("id", "0"))
     nick = msg_data.get("nickname", "")
     real_user = msg_data.get("realUsername", "")
     text = msg_data.get("message", "")
     is_registered = msg_data.get("registered", False)
+
     if is_registered and real_user:
         display_name = nick if nick and nick.lower() != real_user.lower() else real_user
+    else:
+        display_name = nick if nick else "Anonymous"
+
+    if template == "role":
+        role = "assistant" if mid == str(my_id) else f"({display_name})"
+        return f"role: {role}: {text}"
+
+    # Default to 'owot' format
+    if is_registered and real_user:
         return f"[*{mid}] {display_name}: {text}"
     return f"[*{mid}] {nick}: {text}" if nick else f"[{mid}]: {text}"
 
 
-def trim_history_by_tokens(history, token_limit):
+def trim_history_by_tokens(history, token_limit, template, my_id):
     """Trim history to stay within token limit."""
     if len(history) == 0:
-        return history
+        return []
+
+    # Format history based on current template
+    formatted_history = [format_message(msg, template, my_id) for msg in history]
 
     # Calculate total tokens
-    full_text = "\n".join(history)
+    full_text = "\n".join(formatted_history)
     tokens = tokenizer(full_text, return_tensors="pt")
     total_tokens = len(tokens["input_ids"][0])
 
     # If within limit, return as-is
     if total_tokens <= token_limit:
-        return history
+        return formatted_history
 
     # Binary search to find the maximum number of messages that fit
     left, right = 1, len(history)
@@ -296,7 +311,8 @@ def trim_history_by_tokens(history, token_limit):
 
     while left <= right:
         mid = (left + right) // 2
-        test_text = "\n".join(history[-mid:])
+        test_formatted = formatted_history[-mid:]
+        test_text = "\n".join(test_formatted)
         test_tokens = tokenizer(test_text, return_tensors="pt")
         token_count = len(test_tokens["input_ids"][0])
 
@@ -307,7 +323,7 @@ def trim_history_by_tokens(history, token_limit):
             right = mid - 1
 
     # Return the best number of messages from the end
-    return history[-best_count:] if best_count > 0 else []
+    return formatted_history[-best_count:] if best_count > 0 else []
 
 
 def do_generate(prompt_str, temp):
@@ -353,7 +369,7 @@ async def shutdown_bot(reason: str):
 
 
 async def handle_command_response(ws, response_msg, loc, my_id, is_admin=False):
-    global current_temperature
+    global current_temperature, chat_template
 
     if response_msg.startswith("GEN_TRIGGER:"):
         _, params = response_msg.split(":", 1)
@@ -361,8 +377,11 @@ async def handle_command_response(ws, response_msg, loc, my_id, is_admin=False):
         gen_temp = float(gen_temp_str)
 
         log(f"[{loc}] Generating...")
-        trimmed_history = trim_history_by_tokens(histories[loc], CONTEXT_TOKEN_LIMIT)
-        prompt = "\n".join(trimmed_history) + f"\n[*{my_id}] {gen_nick}: {gen_start}"
+        trimmed_history = trim_history_by_tokens(histories[loc], CONTEXT_TOKEN_LIMIT, chat_template, my_id)
+        
+        # Build prompt using current template
+        bot_msg_data = {"id": my_id, "nickname": gen_nick, "message": gen_start, "registered": True}
+        prompt = "\n".join(trimmed_history) + "\n" + format_message(bot_msg_data, chat_template, my_id)
 
         loop = asyncio.get_running_loop()
         output = await loop.run_in_executor(executor, do_generate, prompt, gen_temp)
@@ -370,13 +389,24 @@ async def handle_command_response(ws, response_msg, loc, my_id, is_admin=False):
 
         if gen_response:
             await send_response(ws, gen_response, loc, gen_nick, is_admin=is_admin)
-            histories[loc].append(f"[*{my_id}] {gen_nick}: {gen_response}")
+            histories[loc].append({
+                "id": my_id,
+                "nickname": gen_nick,
+                "message": gen_response,
+                "registered": True
+            })
         return
 
     if response_msg.startswith("SET_TEMP:"):
         _, temp_str = response_msg.split(":", 1)
         current_temperature = float(temp_str)
         await send_response(ws, f"🌡️ Global temperature set to {current_temperature}", loc, is_admin=is_admin)
+        return
+
+    if response_msg.startswith("SET_TEMPLATE:"):
+        _, template_name = response_msg.split(":", 1)
+        chat_template = template_name
+        await send_response(ws, f"📝 Chat template changed to {template_name}", loc, is_admin=is_admin)
         return
 
     if response_msg.startswith("SET_COLOR:"):
@@ -524,7 +554,7 @@ async def handle_websocket(url, name, is_network=False):
                 if loc not in histories:
                     histories[loc] = []
 
-                ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, BOT_COLOR, permission_manager, is_registered)
+                ctx = create_command_context(ws, loc, real_user, my_id, histories, current_temperature, BOT_COLOR, permission_manager, is_registered, chat_template)
                 response_msg = command_dispatcher.dispatch(msg_text, ctx)
 
                 if response_msg:
@@ -532,8 +562,13 @@ async def handle_websocket(url, name, is_network=False):
                     await handle_command_response(ws, response_msg, loc, my_id, is_admin=sender_is_admin)
                     continue
 
-                formatted = format_message(data)
-                histories[loc].append(formatted)
+                histories[loc].append({
+                    "id": data.get("id"),
+                    "nickname": data.get("nickname"),
+                    "realUsername": data.get("realUsername"),
+                    "message": data.get("message"),
+                    "registered": data.get("registered")
+                })
                 if len(histories[loc]) > CONTEXT_LIMIT:
                     histories[loc].pop(0)
 
