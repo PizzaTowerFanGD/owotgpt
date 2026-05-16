@@ -273,22 +273,14 @@ def format_message(msg_data, template="owot", my_id=None):
     text = msg_data.get("message", "")
     is_registered = msg_data.get("registered", False)
 
+    if template == "model":
+        role = "assistant" if mid == str(my_id) else "user"
+        return {"role": role, "content": text}
+
     if is_registered and real_user:
         display_name = nick if nick and nick.lower() != real_user.lower() else real_user
     else:
         display_name = nick if nick else "Anonymous"
-
-    if template == "role":
-        role = "assistant" if mid == str(my_id) else f"({display_name})"
-        return f"role: {role}: {text}"
-
-    if template == "instruct":
-        role = "Assistant" if mid == str(my_id) else f"User ({display_name})"
-        return f"{role}: {text}"
-
-    if template == "chatml":
-        role = "assistant" if mid == str(my_id) else f"user name={display_name}"
-        return f"<|im_start|>{role}\n{text}<|im_end|>"
 
     # Default to 'owot' format
     if is_registered and real_user:
@@ -305,7 +297,11 @@ def trim_history_by_tokens(history, token_limit, template, my_id):
     formatted_history = [format_message(msg, template, my_id) for msg in history]
 
     # Calculate total tokens
-    full_text = "\n".join(formatted_history)
+    if template == "model":
+        full_text = tokenizer.apply_chat_template(formatted_history, tokenize=False)
+    else:
+        full_text = "\n".join(formatted_history)
+
     tokens = tokenizer(full_text, return_tensors="pt")
     total_tokens = len(tokens["input_ids"][0])
 
@@ -320,7 +316,10 @@ def trim_history_by_tokens(history, token_limit, template, my_id):
     while left <= right:
         mid = (left + right) // 2
         test_formatted = formatted_history[-mid:]
-        test_text = "\n".join(test_formatted)
+        if template == "model":
+            test_text = tokenizer.apply_chat_template(test_formatted, tokenize=False)
+        else:
+            test_text = "\n".join(test_formatted)
         test_tokens = tokenizer(test_text, return_tensors="pt")
         token_count = len(test_tokens["input_ids"][0])
 
@@ -336,6 +335,7 @@ def trim_history_by_tokens(history, token_limit, template, my_id):
 
 def do_generate(prompt_str, temp):
     inputs = tokenizer(prompt_str, return_tensors="pt").to(device)
+    input_ids = inputs["input_ids"]
     output = model.generate(
         **inputs,
         max_new_tokens=100,
@@ -343,8 +343,8 @@ def do_generate(prompt_str, temp):
         do_sample=True,
         pad_token_id=tokenizer.eos_token_id
     )
-    generated = tokenizer.decode(output[0], skip_special_tokens=True)
-    result = generated[len(prompt_str):].strip()
+    generated_ids = output[0][len(input_ids[0]):]
+    result = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
     if '\n' in result:
         result = result.split('\n')[0]
     return result
@@ -388,8 +388,12 @@ async def handle_command_response(ws, response_msg, loc, my_id, is_admin=False):
         trimmed_history = trim_history_by_tokens(histories[loc], CONTEXT_TOKEN_LIMIT, chat_template, my_id)
         
         # Build prompt using current template
-        bot_msg_data = {"id": my_id, "nickname": gen_nick, "message": gen_start, "registered": True}
-        prompt = "\n".join(trimmed_history) + "\n" + format_message(bot_msg_data, chat_template, my_id)
+        if chat_template == "model":
+            messages = trimmed_history + [{"role": "assistant", "content": gen_start}]
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False)
+        else:
+            bot_msg_data = {"id": my_id, "nickname": gen_nick, "message": gen_start, "registered": True}
+            prompt = "\n".join(trimmed_history) + "\n" + format_message(bot_msg_data, chat_template, my_id)
 
         loop = asyncio.get_running_loop()
         output = await loop.run_in_executor(executor, do_generate, prompt, gen_temp)
