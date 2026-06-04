@@ -90,7 +90,7 @@ async def send_response(ws, message, loc, nickname=None, color=None, is_admin=Fa
         "message": message,
         "location": loc,
         "color": color,
-        "customMeta": {"tag": "bot"}
+        "customMeta": json.dumps({"tag": "bot"}, separators=(',', ':'))
     }))
 
 
